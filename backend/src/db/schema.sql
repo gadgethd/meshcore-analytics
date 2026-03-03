@@ -1,0 +1,88 @@
+-- MeshCore Analytics — Database Schema
+-- TimescaleDB with 28-day auto-retention on packets
+
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+-- ─── Persistent tables (no retention) ─────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS nodes (
+  node_id          TEXT PRIMARY KEY,  -- Ed25519 public key hex
+  name             TEXT,
+  lat              DOUBLE PRECISION,
+  lon              DOUBLE PRECISION,
+  iata             TEXT,              -- Observer location code from topic
+  role             INTEGER,           -- 1=Repeater, 2=RoomServer, 3=Companion
+  last_seen        TIMESTAMPTZ DEFAULT NOW(),
+  is_online        BOOLEAN DEFAULT FALSE,
+  hardware_model   TEXT,
+  firmware_version TEXT,
+  public_key       TEXT,              -- Same as node_id, kept for clarity
+  created_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS planned_nodes (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_pubkey TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  lat          DOUBLE PRECISION NOT NULL,
+  lon          DOUBLE PRECISION NOT NULL,
+  height_m     DOUBLE PRECISION DEFAULT 10,
+  notes        TEXT,
+  created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS observers (
+  public_key     TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  location       TEXT,
+  registered_at  TIMESTAMPTZ DEFAULT NOW(),
+  is_active      BOOLEAN DEFAULT TRUE
+);
+
+-- ─── Migrate existing nodes table if columns are missing ─────────────────
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS iata TEXT;
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS role INTEGER;
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS advert_count INTEGER NOT NULL DEFAULT 0;
+
+-- ─── Packets hypertable (28-day retention) ────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS packets (
+  time          TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+  packet_hash   TEXT             NOT NULL,
+  rx_node_id    TEXT,
+  src_node_id   TEXT,
+  topic         TEXT             NOT NULL,
+  packet_type   INTEGER,
+  route_type    INTEGER,
+  hop_count     INTEGER,
+  rssi          DOUBLE PRECISION,
+  snr           DOUBLE PRECISION,
+  payload       JSONB,
+  raw_hex       TEXT
+);
+
+SELECT create_hypertable('packets', 'time', if_not_exists => TRUE);
+
+-- 28-day automatic data retention — applies to ALL chunks older than 28 days
+SELECT add_retention_policy(
+  'packets',
+  INTERVAL '28 days',
+  if_not_exists => TRUE
+);
+
+ALTER TABLE packets ADD COLUMN IF NOT EXISTS advert_count INTEGER;
+
+-- Indexes for common query patterns
+CREATE INDEX IF NOT EXISTS packets_hash_idx   ON packets (packet_hash, time DESC);
+CREATE INDEX IF NOT EXISTS packets_rx_idx     ON packets (rx_node_id, time DESC);
+CREATE INDEX IF NOT EXISTS packets_src_idx    ON packets (src_node_id, time DESC);
+
+-- ─── Coverage polygons (one row per node, recalculated on position change) ───
+
+CREATE TABLE IF NOT EXISTS node_coverage (
+  node_id          TEXT PRIMARY KEY,
+  geom             JSONB NOT NULL,            -- GeoJSON Polygon or MultiPolygon
+  antenna_height_m DOUBLE PRECISION DEFAULT 10,
+  radius_m         DOUBLE PRECISION DEFAULT 30000,
+  calculated_at    TIMESTAMPTZ DEFAULT NOW()
+);

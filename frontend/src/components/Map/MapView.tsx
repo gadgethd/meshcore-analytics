@@ -1,0 +1,204 @@
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import { MapContainer, TileLayer, useMap, Pane, Polygon, Polyline } from 'react-leaflet';
+import type { LatLngExpression, Map as LeafletMap } from 'leaflet';
+import type { MeshNode, PacketArc } from '../../hooks/useNodes.js';
+import type { NodeCoverage } from '../../hooks/useCoverage.js';
+import { NodeMarker } from './NodeMarker.js';
+import { PacketArcLayer } from './PacketArcLayer.js';
+import { NodeSearch } from './NodeSearch.js';
+
+// Sync Leaflet view state with deck.gl view state
+interface SyncerProps {
+  onViewStateChange: (vs: DeckViewState) => void;
+}
+
+interface DeckViewState {
+  longitude: number;
+  latitude:  number;
+  zoom:      number;
+  pitch:     number;
+  bearing:   number;
+}
+
+// Leaflet→deck.gl sync component
+const LeafletDeckSyncer: React.FC<SyncerProps> = ({ onViewStateChange }) => {
+  const map = useMap();
+
+  React.useEffect(() => {
+    const sync = () => {
+      const center = map.getCenter();
+      onViewStateChange({
+        longitude: center.lng,
+        latitude:  center.lat,
+        // deck.gl uses 512px tiles (mapbox convention); Leaflet uses 256px.
+        // One zoom level difference = factor of 2 in scale.
+        zoom:      map.getZoom() - 1,
+        pitch:     0,
+        bearing:   0,
+      });
+    };
+
+    map.on('move', sync);
+    map.on('zoom', sync);
+    sync();
+    return () => { map.off('move', sync); map.off('zoom', sync); };
+  }, [map, onViewStateChange]);
+
+  return null;
+};
+
+// GeoJSON rings are [lon, lat]; Leaflet wants [lat, lon].
+function ringToLatLng(ring: number[][]): LatLngExpression[] {
+  return ring.map(([lon, lat]) => [lat, lon] as LatLngExpression);
+}
+
+// Raw outer rings from each coverage polygon — used for the green coverage display.
+// Using raw rings (not a union) with fillRule:'nonzero' means:
+//   - overlapping viewsheds: winding numbers add (+1 per CCW ring) → always filled ✓
+//   - no opacity stacking: single SVG <path> element, one fill pass ✓
+function useCoverageDisplayRings(coverage: NodeCoverage[]): LatLngExpression[][] {
+  return useMemo(() => {
+    return coverage.flatMap((c) => {
+      if (c.geom.type === 'Polygon')
+        return [ringToLatLng((c.geom.coordinates as number[][][])[0])];
+      if (c.geom.type === 'MultiPolygon')
+        return (c.geom.coordinates as number[][][][]).map((poly) => ringToLatLng(poly[0]));
+      return [];
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coverage]);
+}
+
+
+interface MapViewProps {
+  nodes:           Map<string, MeshNode>;
+  arcs:            PacketArc[];
+  activeNodes:     Set<string>;
+  coverage:        NodeCoverage[];
+  showPackets:     boolean;
+  showCoverage:    boolean;
+  showClientNodes: boolean;
+  packetPath:      [number, number][] | null;
+  pathOpacity:     number;
+  onMapReady?:     (m: LeafletMap) => void;
+}
+
+// Default UK centre (Teesside area)
+const DEFAULT_CENTER: [number, number] = [54.57, -1.23];
+const DEFAULT_ZOOM = 11;
+
+export const MapView: React.FC<MapViewProps> = ({
+  nodes, arcs, activeNodes, coverage, showPackets, showCoverage, showClientNodes, packetPath, pathOpacity, onMapReady,
+}) => {
+  const [map, setMap] = useState<LeafletMap | null>(null);
+
+  useEffect(() => {
+    if (map && onMapReady) onMapReady(map);
+  }, [map, onMapReady]);
+
+  const [deckViewState, setDeckViewState] = useState<DeckViewState>({
+    longitude: DEFAULT_CENTER[1],
+    latitude:  DEFAULT_CENTER[0],
+    zoom:      DEFAULT_ZOOM,
+    pitch:     0,
+    bearing:   0,
+  });
+
+  const handleViewStateChange = useCallback((vs: unknown) => {
+    setDeckViewState(vs as DeckViewState);
+  }, []);
+
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+  const allNodesWithPos = useMemo(() => Array.from(nodes.values()).filter(
+    (n) => n.lat && n.lon
+      && (Date.now() - new Date(n.last_seen).getTime()) < SEVEN_DAYS_MS
+      && !n.name?.includes('🚫')
+  ), [nodes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const nodesWithPos   = useMemo(() => allNodesWithPos.filter((n) => n.role === undefined || n.role === 2), [allNodesWithPos]);
+  const clientNodesArr = useMemo(() => allNodesWithPos.filter((n) => n.role === 1 || n.role === 3), [allNodesWithPos]);
+
+  const coverageRings = useCoverageDisplayRings(coverage);
+
+  return (
+    <div className="map-area">
+      <NodeSearch nodes={nodes} map={map} />
+      <MapContainer
+        ref={setMap}
+        center={DEFAULT_CENTER}
+        zoom={DEFAULT_ZOOM}
+        style={{ width: '100%', height: '100%' }}
+        zoomControl={false}
+        attributionControl={false}
+      >
+        {/* CartoDB Dark Matter tiles */}
+        <TileLayer
+          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+          subdomains="abcd"
+          maxZoom={19}
+          keepBuffer={6}
+          updateWhenIdle={false}
+        />
+
+        {/* Sync Leaflet map position to deck.gl */}
+        <LeafletDeckSyncer onViewStateChange={handleViewStateChange} />
+
+        {/* Coverage — raw outer rings from each viewshed, fillRule:'nonzero'.
+            nonzero means overlapping CCW rings sum winding numbers (+1 each)
+            so all covered areas fill regardless of how many viewsheds overlap. */}
+        {showCoverage && coverageRings.length > 0 && (
+          <Pane name="coveragePane" style={{ zIndex: 350 }}>
+            <Polygon
+              positions={coverageRings as LatLngExpression[][]}
+              pathOptions={{
+                fillColor:   '#1ec850',
+                fillOpacity: 0.22,
+                weight:      0,
+                fillRule:    'nonzero',
+              }}
+              interactive={false}
+            />
+          </Pane>
+        )}
+
+        {/* Repeater markers — Leaflet default marker pane at zIndex 600 */}
+        {nodesWithPos.map((node) => (
+          <NodeMarker
+            key={node.node_id}
+            node={node}
+            isActive={activeNodes.has(node.node_id)}
+          />
+        ))}
+
+        {/* Companion radio + room server markers (toggled via filter) */}
+        {showClientNodes && clientNodesArr.map((node) => (
+          <NodeMarker
+            key={node.node_id}
+            node={node}
+            isActive={activeNodes.has(node.node_id)}
+          />
+        ))}
+
+        {/* Live packet path — dotted line from source node to receiving observer */}
+        {packetPath && (
+          <Polyline
+            positions={packetPath}
+            pathOptions={{
+              color:     '#00c4ff',
+              weight:    2,
+              dashArray: '6 9',
+              opacity:   pathOpacity,
+            }}
+          />
+        )}
+      </MapContainer>
+
+      {/* deck.gl overlay — arcs only */}
+      <PacketArcLayer
+        arcs={arcs}
+        showArcs={showPackets}
+        viewState={deckViewState}
+      />
+    </div>
+  );
+};

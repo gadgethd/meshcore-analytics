@@ -1,0 +1,5 @@
+redis==5.0.8
+psycopg2-binary==2.9.10
+shapely==2.0.6
+requests==2.32.3
+scipy

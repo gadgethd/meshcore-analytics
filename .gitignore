@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables — never commit real credentials
+.env
+
+# Mosquitto credentials (generated file, not for source control)
+mosquitto/passwd
+
+# Key files
+scripts/keys/
+
+# Docker named volumes (if you ever bind-mount locally)
+timescaledb_data/
+redis_data/
+mosquitto/data/
+mosquitto/log/
+
+# OS / editor
+.DS_Store
+.vscode/
+*.swp
+
+# Python cache (viewshed worker)
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude context file (may contain deployment-specific details)
+CLAUDE.md

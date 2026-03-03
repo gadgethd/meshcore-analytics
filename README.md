@@ -1,0 +1,167 @@
+# MeshCore Analytics
+
+A real-time mesh network analytics platform for [MeshCore](https://meshcore.co.uk) networks. Ingests MQTT packets via `mctomqtt`, decodes them with `@michaelhart/meshcore-decoder`, stores them in TimescaleDB, and presents a live RF/signals-intelligence-style dashboard with node mapping, coverage viewshed polygons, packet statistics, and a decoded live feed.
+
+---
+
+## Features
+
+- Live map of repeater nodes with animated packet arcs between observers
+- RF coverage viewshed polygons computed per node using SRTM terrain data
+- Gap detection overlay showing areas without coverage
+- Decoded live packet feed (Adverts, Group messages, DMs, ACKs, Trace routes)
+- Statistics page with charts: packet rates, unique radios, hop distribution, top chatters
+- 28-day rolling packet retention via TimescaleDB
+- Multi-observer support: duplicate packets deduplicated by hash
+
+---
+
+## Quick Start
+
+```bash
+# 1. Clone and enter the project
+git clone https://github.com/youruser/meshcore-analytics.git
+cd meshcore-analytics
+
+# 2. Copy and configure environment
+cp .env.example .env
+# Edit .env — at minimum set POSTGRES_PASSWORD, JWT_SECRET, MQTT_PASSWORD
+
+# 3. Start everything
+docker compose up -d
+
+# 4. Check logs
+docker compose logs -f app
+```
+
+The app will be available at `http://localhost:3000`.
+
+To expose it publicly, configure a Cloudflare Tunnel (see below) or reverse proxy of your choice.
+
+---
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and fill in your values. All variables used by the app:
+
+| Variable | Default | Description |
+|---|---|---|
+| `POSTGRES_DB` | `meshcore` | TimescaleDB database name |
+| `POSTGRES_USER` | `meshcore` | TimescaleDB user |
+| `POSTGRES_PASSWORD` | *(required)* | TimescaleDB password |
+| `MQTT_BROKER_URL` | `ws://mosquitto:9001` | Mosquitto WebSocket URL (internal) |
+| `MQTT_USERNAME` | `backend` | MQTT client username |
+| `MQTT_PASSWORD` | *(required)* | MQTT client password |
+| `REDIS_URL` | `redis://redis:6379` | Redis URL for WebSocket pub/sub |
+| `JWT_SECRET` | *(required)* | Secret for JWT verification |
+| `ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:3001` | Comma-separated browser origins allowed for CORS and WebSocket |
+| `VITE_APP_HOSTNAME` | *(blank — always shows dashboard)* | If set, only this hostname serves the analytics dashboard; all others serve the public website layout |
+| `MESHCORE_CHANNEL_SECRETS` | *(blank)* | Comma-separated channel secrets for decrypting GroupText packets. Format: `name:hex` or bare hex. The default MeshCore public channel key is always included. |
+| `OPENTOPODATA_API` | `https://api.opentopodata.org` | Elevation API endpoint for viewshed computation |
+| `CLOUDFLARE_TUNNEL_TOKEN` | *(optional)* | Cloudflare Zero Trust tunnel token |
+| `PORT` | `3000` | Internal app port |
+
+---
+
+## Mosquitto Setup
+
+Mosquitto is configured for WebSocket-only access with password authentication. After first starting the stack, add a password for the backend client and any node clients:
+
+```bash
+# Add the backend client password (must match MQTT_PASSWORD in .env)
+docker exec meshcore-analytics-mosquitto-1 \
+  mosquitto_passwd -b /mosquitto/config/passwd backend your_password
+
+# Add a node client
+docker exec meshcore-analytics-mosquitto-1 \
+  mosquitto_passwd -b /mosquitto/config/passwd node1 another_password
+
+docker compose restart mosquitto
+```
+
+Edit `mosquitto/acl` to grant the appropriate topic permissions to each user.
+
+---
+
+## Cloudflare Tunnel (optional)
+
+To expose the app and MQTT broker publicly without opening firewall ports:
+
+1. Go to [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) → Networks → Tunnels
+2. Create a tunnel and copy the token
+3. Add to `.env`: `CLOUDFLARE_TUNNEL_TOKEN=<token>`
+4. Start with the tunnel profile: `docker compose --profile tunnel up -d`
+5. Configure public hostnames in the Cloudflare dashboard:
+   - `app.yourdomain.com` → `http://app:3000`
+   - `mqtt.yourdomain.com` → `http://mosquitto:9001` (WebSocket)
+
+---
+
+## MQTT Topic Structure
+
+The backend subscribes to `meshcore/#`. MeshCore devices publish via `mctomqtt` to topics of the form:
+
+```
+meshcore/<IATA>/<observer-public-key>/packets   # received/transmitted packets
+meshcore/<IATA>/<observer-public-key>/status    # node status advertisement
+```
+
+Payloads are JSON envelopes containing a `raw` hex field (the MeshCore packet) plus metadata (RSSI, SNR, direction, hash, etc.).
+
+---
+
+## Architecture
+
+```
+MeshCore Devices
+     │ LoRa RF
+     ▼
+ mctomqtt (on node machine)
+     │ MQTT over WebSocket/TLS
+     ▼
+ Mosquitto ─────────────────────────────── (optional Cloudflare Tunnel)
+     │ subscribe meshcore/#
+     ▼
+ App (Node.js/TypeScript)
+     │
+     ├─ meshcore-decoder → TimescaleDB (packets · 28d retention)
+     │                     (nodes, planned_nodes, observers · persistent)
+     │
+     ├─ Redis pub/sub
+     │
+     ├─ WebSocket → Frontend live updates
+     └─ REST API /api/*
+          │
+          └─ Static Frontend (React + Leaflet + deck.gl)
+
+ Viewshed Worker (Python)
+     ├─ Redis job queue
+     ├─ SRTM terrain tiles (auto-downloaded)
+     └─ node_coverage table → coverage polygons served via /api/coverage
+```
+
+---
+
+## Services
+
+| Service | Image | Purpose |
+|---|---|---|
+| `timescaledb` | `timescale/timescaledb:latest-pg16` | Time-series packet storage with retention |
+| `mosquitto` | `eclipse-mosquitto:2` | MQTT broker (WebSocket only) |
+| `redis` | `redis:7-alpine` | WebSocket fan-out pub/sub and job queue |
+| `app` | Built from `Dockerfile` | Backend API + frontend static files |
+| `viewshed-worker` | Built from `viewshed-worker/Dockerfile` | Terrain-aware RF coverage computation |
+| `cloudflared` | `cloudflare/cloudflared` | Optional Cloudflare Tunnel (use `--profile tunnel`) |
+
+---
+
+## Data Retention
+
+- **Packets** hypertable: automatic 28-day retention via TimescaleDB retention policy applied on first startup
+- **Nodes**, **planned\_nodes**, **observers**, **node\_coverage**: persist indefinitely
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).

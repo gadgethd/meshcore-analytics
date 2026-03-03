@@ -1,0 +1,8 @@
+# backend service — subscribe to everything (used by the analytics app)
+user backend
+topic readwrite meshcore/#
+
+# node observers — publish to meshcore/{IATA}/{PUBKEY}/packets
+# IATA and pubkey are not known at registration time so allow the full namespace
+user node1
+topic write meshcore/#

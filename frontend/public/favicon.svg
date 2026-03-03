@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="7" fill="#0a1628"/>
+  <!-- Signal source dot -->
+  <circle cx="16" cy="23" r="2.5" fill="#00c4ff"/>
+  <!-- Signal waves -->
+  <path d="M 10.5 19 Q 10.5 13 16 13 Q 21.5 13 21.5 19" fill="none" stroke="#00c4ff" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 6 21 Q 6 9 16 9 Q 26 9 26 21" fill="none" stroke="#00c4ff" stroke-width="2" stroke-linecap="round" opacity="0.55"/>
+  <path d="M 2 23 Q 2 5 16 5 Q 30 5 30 23" fill="none" stroke="#00c4ff" stroke-width="1.5" stroke-linecap="round" opacity="0.25"/>
+</svg>
