@@ -309,7 +309,7 @@ def calculate_viewshed(node_id: str, lat: float, lon: float) -> Optional[tuple[d
             log.warning(f'{node_id}: degenerate geometry after clipping — skipping')
             return None
 
-        return mapping(result), radius_m
+        return mapping(result), radius_m, elevation_m
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
@@ -318,7 +318,7 @@ def already_calculated(db, node_id: str) -> bool:
         cur.execute('SELECT 1 FROM node_coverage WHERE node_id = %s', (node_id,))
         return cur.fetchone() is not None
 
-def store_coverage(db, node_id: str, geom: dict, radius_m: float):
+def store_coverage(db, node_id: str, geom: dict, radius_m: float, elevation_m: float):
     with db.cursor() as cur:
         cur.execute(
             '''INSERT INTO node_coverage (node_id, geom, antenna_height_m, radius_m)
@@ -330,6 +330,34 @@ def store_coverage(db, node_id: str, geom: dict, radius_m: float):
                      calculated_at = NOW()''',
             (node_id, json.dumps(geom), ANTENNA_HEIGHT_M, radius_m),
         )
+        cur.execute(
+            'UPDATE nodes SET elevation_m = %s WHERE node_id = %s',
+            (round(elevation_m, 1), node_id),
+        )
+    db.commit()
+
+def backfill_elevations(db):
+    """For nodes that already have a computed viewshed but no elevation stored,
+    reverse-compute elevation from radius_m: h = r² / (2·k·R) - antenna_height."""
+    with db.cursor() as cur:
+        cur.execute('''
+            SELECT nc.node_id, nc.radius_m
+            FROM node_coverage nc
+            JOIN nodes n ON n.node_id = nc.node_id
+            WHERE n.elevation_m IS NULL AND nc.radius_m IS NOT NULL
+        ''')
+        rows = cur.fetchall()
+    if not rows:
+        return
+    log.info(f'Backfilling elevation for {len(rows)} node(s) from stored radius_m')
+    with db.cursor() as cur:
+        for node_id, radius_m in rows:
+            elevation_m = max(0.0, (radius_m ** 2) / (2 * K_FACTOR * R_EARTH_M) - ANTENNA_HEIGHT_M)
+            cur.execute(
+                'UPDATE nodes SET elevation_m = %s WHERE node_id = %s',
+                (round(elevation_m, 1), node_id),
+            )
+            log.info(f'  {node_id[:12]}…: elevation={elevation_m:.0f} m ASL (from radius {radius_m/1000:.1f} km)')
     db.commit()
 
 def enqueue_uncovered(db, r_client):
@@ -390,13 +418,18 @@ def process_job(db, r_client, job: dict):
     if result is None:
         return
 
-    geom, radius_m = result
-    store_coverage(db, node_id, geom, radius_m)
+    geom, radius_m, elevation_m = result
+    store_coverage(db, node_id, geom, radius_m, elevation_m)
     log.info(f'Done in {time.time() - t0:.1f}s — notifying frontend')
 
     r_client.publish(LIVE_CHANNEL, json.dumps({
         'type': 'coverage_update',
         'data': {'node_id': node_id, 'geom': geom},
+        'ts':   int(time.time() * 1000),
+    }))
+    r_client.publish(LIVE_CHANNEL, json.dumps({
+        'type': 'node_upsert',
+        'data': {'node_id': node_id, 'elevation_m': round(elevation_m, 1)},
         'ts':   int(time.time() * 1000),
     }))
 
@@ -447,6 +480,7 @@ def main():
     r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
     r.ping()
     log.info('Connected to Redis')
+    backfill_elevations(db)
     enqueue_uncovered(db, r)
     db.close()
 

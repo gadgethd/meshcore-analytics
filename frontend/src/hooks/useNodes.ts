@@ -12,6 +12,7 @@ export interface MeshNode {
   hardware_model?: string;
   public_key?:    string;
   advert_count?:  number;  // persistent DB count of times this node has advertised
+  elevation_m?:   number;  // terrain elevation ASL from SRTM (set when viewshed computed)
 }
 
 export interface LivePacketData {

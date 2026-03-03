@@ -79,6 +79,8 @@ interface MapViewProps {
   showCoverage:    boolean;
   showClientNodes: boolean;
   packetPath:      [number, number][] | null;
+  betaPath:        [number, number][] | null;
+  showBetaPaths:   boolean;
   pathOpacity:     number;
   onMapReady?:     (m: LeafletMap) => void;
 }
@@ -88,7 +90,8 @@ const DEFAULT_CENTER: [number, number] = [54.57, -1.23];
 const DEFAULT_ZOOM = 11;
 
 export const MapView: React.FC<MapViewProps> = ({
-  nodes, arcs, activeNodes, coverage, showPackets, showCoverage, showClientNodes, packetPath, pathOpacity, onMapReady,
+  nodes, arcs, activeNodes, coverage, showPackets, showCoverage, showClientNodes,
+  packetPath, betaPath, showBetaPaths, pathOpacity, onMapReady,
 }) => {
   const [map, setMap] = useState<LeafletMap | null>(null);
 
@@ -167,6 +170,7 @@ export const MapView: React.FC<MapViewProps> = ({
             key={node.node_id}
             node={node}
             isActive={activeNodes.has(node.node_id)}
+            nodeCoverage={coverage.find((c) => c.node_id === node.node_id)}
           />
         ))}
 
@@ -176,6 +180,7 @@ export const MapView: React.FC<MapViewProps> = ({
             key={node.node_id}
             node={node}
             isActive={activeNodes.has(node.node_id)}
+            nodeCoverage={coverage.find((c) => c.node_id === node.node_id)}
           />
         ))}
 
@@ -185,6 +190,19 @@ export const MapView: React.FC<MapViewProps> = ({
             positions={packetPath}
             pathOptions={{
               color:     '#00c4ff',
+              weight:    2,
+              dashArray: '6 9',
+              opacity:   pathOpacity,
+            }}
+          />
+        )}
+
+        {/* Beta path — coverage-validated, unambiguous hop resolution */}
+        {showBetaPaths && betaPath && (
+          <Polyline
+            positions={betaPath}
+            pathOptions={{
+              color:     '#a855f7',
               weight:    2,
               dashArray: '6 9',
               opacity:   pathOpacity,

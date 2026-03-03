@@ -95,7 +95,7 @@ export async function insertPacket(p: {
 
 export async function getNodes() {
   const res = await pool.query(
-    `SELECT node_id, name, lat, lon, iata, role, last_seen, is_online, hardware_model, public_key, advert_count
+    `SELECT node_id, name, lat, lon, iata, role, last_seen, is_online, hardware_model, public_key, advert_count, elevation_m
      FROM nodes ORDER BY last_seen DESC`
   );
   return res.rows;

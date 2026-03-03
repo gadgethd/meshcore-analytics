@@ -309,6 +309,24 @@ html, body, #root {
   background: var(--accent);
 }
 
+.filter-slider {
+  padding: 2px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.filter-slider__label {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+}
+.filter-slider__input {
+  width: 100%;
+  accent-color: #a855f7;
+  cursor: pointer;
+}
+
 /* ─── Node Marker ────────────────────────────────────────────────────────── */
 .node-marker {
   position: relative;
@@ -420,6 +438,31 @@ html, body, #root {
 .node-popup__row span:last-child {
   color: var(--text-primary);
   font-family: var(--font-mono);
+}
+
+.node-popup__coverage-btn {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 5px 0;
+  background: transparent;
+  border: 1px solid #1ec85066;
+  border-radius: 4px;
+  color: #1ec850;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.node-popup__coverage-btn:hover {
+  background: #1ec85018;
+  border-color: #1ec850;
+}
+.node-popup__coverage-btn--active {
+  background: #1ec85018;
+  border-color: #1ec850;
+  color: #1ec850;
 }
 
 /* ─── Live packet feed (bottom left) ────────────────────────────────────── */

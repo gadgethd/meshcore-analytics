@@ -69,7 +69,7 @@ export const HomePage: React.FC = () => {
             a free, open-source LoRa mesh platform. No internet. No infrastructure. Just radio.
           </p>
           <div className="site-hero__actions">
-            <Link to="/app" className="site-btn site-btn--primary">Open Live Map →</Link>
+            <a href="https://app.teessidemesh.com" className="site-btn site-btn--primary">Open Live Map →</a>
             <Link to="/about" className="site-btn site-btn--ghost">Learn more</Link>
           </div>
         </div>

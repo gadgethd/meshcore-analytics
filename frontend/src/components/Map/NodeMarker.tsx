@@ -1,9 +1,12 @@
-import React from 'react';
-import { Marker, Popup } from 'react-leaflet';
+import React, { useState, useEffect, useRef } from 'react';
+import { Marker, Popup, Polygon, Pane } from 'react-leaflet';
 import L from 'leaflet';
+import type { LatLngExpression } from 'leaflet';
 import type { MeshNode } from '../../hooks/useNodes.js';
+import type { NodeCoverage } from '../../hooks/useCoverage.js';
 
 const SEVEN_DAYS_MS  = 7  * 24 * 60 * 60 * 1000;
+const PREVIEW_TTL_MS = 20_000;
 
 type MarkerVariant = 'repeater' | 'companion' | 'room';
 
@@ -53,12 +56,37 @@ function roleVariant(role: number | undefined): MarkerVariant {
   return 'repeater';
 }
 
-interface Props {
-  node:     MeshNode;
-  isActive: boolean;
+function ringToLatLng(ring: number[][]): LatLngExpression[] {
+  return ring.map(([lon, lat]) => [lat, lon] as LatLngExpression);
 }
 
-export const NodeMarker: React.FC<Props> = React.memo(({ node, isActive }) => {
+function coverageToRings(cov: NodeCoverage): LatLngExpression[][] {
+  const geom = cov.geom;
+  if (geom.type === 'Polygon')
+    return [(geom.coordinates as number[][][])[0]!].map(ringToLatLng);
+  if (geom.type === 'MultiPolygon')
+    return (geom.coordinates as number[][][][]).map((poly) => ringToLatLng(poly[0]!));
+  return [];
+}
+
+interface Props {
+  node:          MeshNode;
+  isActive:      boolean;
+  nodeCoverage?: NodeCoverage;
+}
+
+export const NodeMarker: React.FC<Props> = React.memo(({ node, isActive, nodeCoverage }) => {
+  const [showPreview, setShowPreview] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+
+  const handleShowCoverage = () => {
+    setShowPreview(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setShowPreview(false), PREVIEW_TTL_MS);
+  };
+
   if (!node.lat || !node.lon) return null;
 
   const ageMs   = Date.now() - new Date(node.last_seen).getTime();
@@ -74,46 +102,81 @@ export const NodeMarker: React.FC<Props> = React.memo(({ node, isActive }) => {
     ? 'var(--danger)'
     : node.is_online ? 'var(--online)' : 'var(--offline)';
 
+  const previewRings = showPreview && nodeCoverage ? coverageToRings(nodeCoverage) : [];
+
   return (
-    <Marker
-      position={[node.lat, node.lon]}
-      icon={buildIcon(node.is_online, isActive, isStale, variant)}
-    >
-      <Popup>
-        <div className="node-popup">
-          <div className="node-popup__name">{node.name ?? `Unknown ${fallbackName}`}</div>
-          {node.role !== undefined && node.role !== 2 && (
+    <>
+      <Marker
+        position={[node.lat, node.lon]}
+        icon={buildIcon(node.is_online, isActive, isStale, variant)}
+      >
+        <Popup>
+          <div className="node-popup">
+            <div className="node-popup__name">{node.name ?? `Unknown ${fallbackName}`}</div>
+            {node.role !== undefined && node.role !== 2 && (
+              <div className="node-popup__row">
+                <span>Type</span>
+                <span>{ROLE_LABELS[node.role] ?? 'Unknown'}</span>
+              </div>
+            )}
             <div className="node-popup__row">
-              <span>Type</span>
-              <span>{ROLE_LABELS[node.role] ?? 'Unknown'}</span>
+              <span>Status</span>
+              <span style={{ color: statusColor }}>{statusLabel}</span>
             </div>
-          )}
-          <div className="node-popup__row">
-            <span>Status</span>
-            <span style={{ color: statusColor }}>{statusLabel}</span>
-          </div>
-          {node.hardware_model && (
+            {node.hardware_model && (
+              <div className="node-popup__row">
+                <span>Hardware</span>
+                <span>{node.hardware_model}</span>
+              </div>
+            )}
             <div className="node-popup__row">
-              <span>Hardware</span>
-              <span>{node.hardware_model}</span>
+              <span>Last seen</span>
+              <span>{timeAgo(node.last_seen)}</span>
             </div>
-          )}
-          <div className="node-popup__row">
-            <span>Last seen</span>
-            <span>{timeAgo(node.last_seen)}</span>
-          </div>
-          {node.advert_count !== undefined && (
+            {node.advert_count !== undefined && (
+              <div className="node-popup__row">
+                <span>Times seen</span>
+                <span>{node.advert_count}</span>
+              </div>
+            )}
             <div className="node-popup__row">
-              <span>Times seen</span>
-              <span>{node.advert_count}</span>
+              <span>Position</span>
+              <span>{node.lat.toFixed(5)}, {node.lon.toFixed(5)}</span>
             </div>
-          )}
-          <div className="node-popup__row">
-            <span>Position</span>
-            <span>{node.lat.toFixed(5)}, {node.lon.toFixed(5)}</span>
+            {node.elevation_m !== undefined && node.elevation_m !== null && (
+              <div className="node-popup__row">
+                <span>Elevation</span>
+                <span>{Math.round(node.elevation_m)} m ASL</span>
+              </div>
+            )}
+            {nodeCoverage && (
+              <button
+                className={`node-popup__coverage-btn${showPreview ? ' node-popup__coverage-btn--active' : ''}`}
+                onClick={handleShowCoverage}
+              >
+                {showPreview ? 'Showing coverage…' : 'Preview coverage'}
+              </button>
+            )}
           </div>
-        </div>
-      </Popup>
-    </Marker>
+        </Popup>
+      </Marker>
+
+      {previewRings.length > 0 && (
+        <Pane name={`cov-preview-${node.node_id}`} style={{ zIndex: 351 }}>
+          <Polygon
+            positions={previewRings as LatLngExpression[][]}
+            pathOptions={{
+              fillColor:   '#1ec850',
+              fillOpacity: 0.10,
+              weight:      1,
+              color:       '#1ec850',
+              opacity:     0.5,
+              fillRule:    'nonzero',
+            }}
+            interactive={false}
+          />
+        </Pane>
+      )}
+    </>
   );
 });

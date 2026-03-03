@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS observers (
 ALTER TABLE nodes ADD COLUMN IF NOT EXISTS iata TEXT;
 ALTER TABLE nodes ADD COLUMN IF NOT EXISTS role INTEGER;
 ALTER TABLE nodes ADD COLUMN IF NOT EXISTS advert_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS elevation_m DOUBLE PRECISION;
 
 -- ─── Packets hypertable (28-day retention) ────────────────────────────────
 

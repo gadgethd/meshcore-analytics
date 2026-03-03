@@ -7,13 +7,15 @@ import { StatsPanel } from './components/StatsPanel/StatsPanel.js';
 import { PacketFeed } from './components/PacketFeed.js';
 import { useWebSocket, type WSMessage, type WSReadyState } from './hooks/useWebSocket.js';
 import { useNodes, type LivePacketData, type MeshNode } from './hooks/useNodes.js';
-import { useCoverage } from './hooks/useCoverage.js';
+import { useCoverage, type NodeCoverage } from './hooks/useCoverage.js';
 
 const DEFAULT_FILTERS: Filters = {
-  livePackets:  true,
-  coverage:     false,
-  clientNodes:  false,
-  packetPaths:  false,
+  livePackets:       true,
+  coverage:          false,
+  clientNodes:       false,
+  packetPaths:       false,
+  betaPaths:         false,
+  betaPathThreshold: 0.5,
 };
 
 // Connectivity indicator
@@ -96,6 +98,113 @@ function resolvePathWaypoints(
   return waypoints;
 }
 
+// ── Beta path helpers ─────────────────────────────────────────────────────────
+// Effective range for a node: uses the stored radio-horizon radius from the
+// viewshed worker (computed from actual SRTM terrain elevation), clamped 50–80 km.
+function nodeRange(nodeId: string, coverage: NodeCoverage[]): number {
+  const cov = coverage.find((c) => c.node_id === nodeId);
+  if (!cov?.radius_m) return 50;
+  return Math.min(80, Math.max(50, cov.radius_m / 1000));
+}
+
+// Returns true if two nodes are within range of each other.
+// Threshold is the max of each node's elevation-derived range (50–80 km).
+function canReach(a: MeshNode, b: MeshNode, coverage: NodeCoverage[]): boolean {
+  const threshold = Math.max(nodeRange(a.node_id, coverage), nodeRange(b.node_id, coverage));
+  const midLat    = ((a.lat! + b.lat!) / 2) * (Math.PI / 180);
+  const dlat      = (a.lat! - b.lat!) * 111;
+  const dlon      = (a.lon! - b.lon!) * 111 * Math.cos(midLat);
+  return Math.hypot(dlat, dlon) < threshold;
+}
+
+function pickByInterpolation(
+  candidates: MeshNode[],
+  src: MeshNode | null,
+  rx: MeshNode,
+  hopIndex: number,
+  totalHops: number,
+): MeshNode {
+  if (candidates.length === 1) return candidates[0]!;
+  if (!src?.lat || !src?.lon) return candidates[0]!;
+  const t      = (hopIndex + 1) / (totalHops + 1);
+  const expLat = src.lat + t * (rx.lat! - src.lat);
+  const expLon = src.lon + t * (rx.lon! - src.lon);
+  return candidates.reduce((a, b) =>
+    Math.hypot(a.lat! - expLat, a.lon! - expLon) <= Math.hypot(b.lat! - expLat, b.lon! - expLon) ? a : b,
+  );
+}
+
+/**
+ * Scores a beta path using per-hop confidence:
+ *   - ambiguity factor:  1 / n_candidates  (fewer matches → more confident)
+ *   - distance factor:   1.0 if chosen hop is within 50 km of prev node
+ *                        0.3 if out of range
+ *                        0.7 if prev node unknown (first hop, src unseen)
+ * Last relay → rx is also distance-checked and penalised if out of range.
+ * Returns null if any hop has zero known candidates.
+ */
+function resolveBetaPath(
+  pathHashes: string[],
+  src: MeshNode | null,
+  rx: MeshNode,
+  allNodes: Map<string, MeshNode>,
+  coverage: NodeCoverage[],
+): { path: [number, number][]; confidence: number } | null {
+  if (!rx.lat || !rx.lon || pathHashes.length === 0) return null;
+
+  const resolvedNodes: MeshNode[] = [];
+  const hopConfidences: number[]  = [];
+  let prevNode: MeshNode | null   = src?.lat && src?.lon ? src : null;
+
+  for (let i = 0; i < pathHashes.length; i++) {
+    const prefix     = pathHashes[i]!.slice(0, 2).toUpperCase();
+    const candidates = Array.from(allNodes.values()).filter(
+      (n) => n.lat && n.lon && (n.role === undefined || n.role === 2)
+        && n.node_id.toUpperCase().startsWith(prefix),
+    );
+    if (candidates.length === 0) return null;
+
+    const ambiguityFactor = 1.0 / candidates.length;
+    let chosen: MeshNode;
+    let coverageFactor: number;
+
+    if (prevNode) {
+      const reachable = candidates.filter((c) => canReach(prevNode!, c, coverage));
+      if (reachable.length > 0) {
+        chosen        = pickByInterpolation(reachable, src, rx, i, pathHashes.length);
+        coverageFactor = 1.0;
+      } else {
+        chosen        = pickByInterpolation(candidates, src, rx, i, pathHashes.length);
+        coverageFactor = 0.3;
+      }
+    } else {
+      // First hop, source unknown — can't check inbound coverage
+      chosen        = pickByInterpolation(candidates, src, rx, i, pathHashes.length);
+      coverageFactor = 0.7;
+    }
+
+    hopConfidences.push(coverageFactor * ambiguityFactor);
+    resolvedNodes.push(chosen);
+    prevNode = chosen;
+  }
+
+  // Penalise if the last relay can't reach rx
+  if (resolvedNodes.length > 0 && !canReach(resolvedNodes[resolvedNodes.length - 1]!, rx, coverage)) {
+    hopConfidences[hopConfidences.length - 1]! *= 0.3;
+  }
+
+  const confidence = hopConfidences.reduce((a, b) => a + b, 0) / hopConfidences.length;
+
+  const pathNodes: MeshNode[] = [
+    ...(src?.lat && src?.lon ? [src] : []),
+    ...resolvedNodes,
+    rx,
+  ];
+  if (pathNodes.length < 2) return null;
+
+  return { path: pathNodes.map((n) => [n.lat!, n.lon!]), confidence };
+}
+
 const DISCLAIMER_KEY = 'meshcore-disclaimer-dismissed';
 
 const DisclaimerModal: React.FC<{ onClose: () => void }> = ({ onClose }) => (
@@ -133,7 +242,8 @@ export const App: React.FC = () => {
   const [stats, setStats]           = useState({ mqttNodes: 0, staleNodes: 0, packetsDay: 0 });
   const [map, setMap]               = useState<LeafletMap | null>(null);
   const [showDisclaimer, setShowDisclaimer] = useState(() => !localStorage.getItem(DISCLAIMER_KEY));
-  const [packetPath, setPacketPath] = useState<[number, number][] | null>(null);
+  const [packetPath, setPacketPath]         = useState<[number, number][] | null>(null);
+  const [betaPacketPath, setBetaPacketPath] = useState<[number, number][] | null>(null);
 
   const dismissDisclaimer = useCallback(() => {
     localStorage.setItem(DISCLAIMER_KEY, '1');
@@ -182,7 +292,7 @@ export const App: React.FC = () => {
     return () => clearInterval(t);
   }, []);
 
-  // Compute dotted path line from most-recent packet's source → observer.
+  // Compute dotted path lines from most-recent packet's source → observer.
   // Clears after PATH_TTL ms (with a 1s fade), or immediately when the next
   // distinct packet arrives.
   const latestId = packets[0]?.id;
@@ -190,34 +300,39 @@ export const App: React.FC = () => {
     if (pathTimerRef.current) clearTimeout(pathTimerRef.current);
     if (pathFadeRef.current !== null) { cancelAnimationFrame(pathFadeRef.current); pathFadeRef.current = null; }
 
-    if (!filters.packetPaths) { setPacketPath(null); setPathOpacity(0.75); return; }
-
     const latest = packets[0];
-    if (!latest?.rxNodeId) { setPacketPath(null); setPathOpacity(0.75); return; }
-    // Need at least a relay path or a known sender to draw anything
-    if (!latest.path?.length && !latest.srcNodeId) { setPacketPath(null); setPathOpacity(0.75); return; }
+    const rx = latest?.rxNodeId ? nodes.get(latest.rxNodeId) : undefined;
 
-    const rx  = nodes.get(latest.rxNodeId);
-    if (!rx?.lat || !rx?.lon) { setPacketPath(null); setPathOpacity(0.75); return; }
-
-    const src = latest.srcNodeId ? (nodes.get(latest.srcNodeId) ?? null) : null;
-    const srcWithPos = src?.lat && src?.lon ? src : null;
-
-    const waypoints = latest.path?.length
-      ? resolvePathWaypoints(latest.path, srcWithPos, rx, nodes)
-      : [[srcWithPos!.lat!, srcWithPos!.lon!], [rx.lat, rx.lon]] as [number, number][];
-
-    if (waypoints.length >= 2) {
-      setPathOpacity(0.75); // snap to full — no animation on arrival
-      setPacketPath(waypoints);
+    // ── Regular packet path ────────────────────────────────────────────────────
+    if (filters.packetPaths && latest?.rxNodeId && (latest.path?.length || latest.srcNodeId) && rx?.lat && rx?.lon) {
+      const src = latest.srcNodeId ? (nodes.get(latest.srcNodeId) ?? null) : null;
+      const srcWithPos = src?.lat && src?.lon ? src : null;
+      const waypoints = latest.path?.length
+        ? resolvePathWaypoints(latest.path, srcWithPos, rx, nodes)
+        : [[srcWithPos!.lat!, srcWithPos!.lon!], [rx.lat, rx.lon]] as [number, number][];
+      setPacketPath(waypoints.length >= 2 ? waypoints : null);
     } else {
       setPacketPath(null);
-      setPathOpacity(0.75);
-      return;
     }
 
+    // ── Beta path (unambiguous hops + coverage validation) ────────────────────
+    if (filters.betaPaths && latest?.rxNodeId && latest.path?.length && rx?.lat && rx?.lon) {
+      const src    = latest.srcNodeId ? (nodes.get(latest.srcNodeId) ?? null) : null;
+      const result = resolveBetaPath(
+        latest.path,
+        src?.lat && src?.lon ? src : null,
+        rx, nodes, coverage,
+      );
+      setBetaPacketPath(result && result.confidence >= filters.betaPathThreshold ? result.path : null);
+    } else {
+      setBetaPacketPath(null);
+    }
+
+    if (!filters.packetPaths && !filters.betaPaths) { setPathOpacity(0.75); return; }
+    if (!latest) { setPathOpacity(0.75); return; }
+
+    setPathOpacity(0.75);
     pathTimerRef.current = setTimeout(() => {
-      // Fade out over 1s then remove
       const FADE_MS = 1_000;
       const startTime = performance.now();
       const animate = (now: number) => {
@@ -228,13 +343,14 @@ export const App: React.FC = () => {
         } else {
           pathFadeRef.current = null;
           setPacketPath(null);
+          setBetaPacketPath(null);
           setPathOpacity(0.75);
         }
       };
       pathFadeRef.current = requestAnimationFrame(animate);
     }, PATH_TTL - 1_000);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [latestId, filters.packetPaths]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [latestId, filters.packetPaths, filters.betaPaths]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleMessage = useCallback((msg: WSMessage) => {
     if (msg.type === 'initial_state') {
@@ -289,7 +405,7 @@ export const App: React.FC = () => {
               className={`filter-row${filters[key] ? ' filter-row--on' : ''}`}
               onClick={() => setFilters({ ...filters, [key]: !filters[key] })}
               role="button"
-              aria-pressed={filters[key]}
+              aria-pressed={!!filters[key]}
             >
               <span className="filter-row__label">
                 {hollow ? (
@@ -321,6 +437,8 @@ export const App: React.FC = () => {
         showCoverage={filters.coverage}
         showClientNodes={filters.clientNodes}
         packetPath={packetPath}
+        betaPath={betaPacketPath}
+        showBetaPaths={filters.betaPaths}
         pathOpacity={pathOpacity}
         onMapReady={setMap}
       />
