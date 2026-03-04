@@ -3,6 +3,22 @@ import { getNodes, getNodeHistory, getRecentPackets, query, MIN_LINK_OBSERVATION
 
 const router = Router();
 
+type NetworkFilters = {
+  params: string[];
+  packets: string;
+  nodes: string;
+  nodesAlias: (alias: string) => string;
+};
+
+function networkFilters(network?: string): NetworkFilters {
+  return {
+    params: network ? [network] : [],
+    packets: network ? 'AND network = $1' : '',
+    nodes: network ? 'AND network = $1' : '',
+    nodesAlias: (alias: string) => (network ? `AND ${alias}.network = $1` : ''),
+  };
+}
+
 // GET /api/nodes — all known nodes
 router.get('/nodes', async (_req, res) => {
   try {
@@ -71,23 +87,21 @@ router.get('/packets/recent', async (req, res) => {
 router.get('/stats', async (req, res) => {
   try {
     const network = req.query['network'] as string | undefined;
-    const np  = network ? [network] : [];       // params array
-    const pf  = network ? 'AND network = $1' : '';  // packets filter
-    const nf  = network ? 'AND network = $1' : '';  // nodes filter
+    const filters = networkFilters(network);
     const [mqttCount, packetCount, staleCount, totalNodeCount, longestHopCount] = await Promise.all([
-      query(`SELECT COUNT(DISTINCT rx_node_id) AS count FROM packets WHERE time > NOW() - INTERVAL '10 minutes' AND rx_node_id IS NOT NULL ${pf}`, np),
-      query(`SELECT COUNT(DISTINCT packet_hash) AS count FROM packets WHERE time > NOW() - INTERVAL '24 hours' ${pf}`, np),
+      query(`SELECT COUNT(DISTINCT rx_node_id) AS count FROM packets WHERE time > NOW() - INTERVAL '10 minutes' AND rx_node_id IS NOT NULL ${filters.packets}`, filters.params),
+      query(`SELECT COUNT(DISTINCT packet_hash) AS count FROM packets WHERE time > NOW() - INTERVAL '24 hours' ${filters.packets}`, filters.params),
       query(`SELECT COUNT(*) AS count FROM nodes
              WHERE lat IS NOT NULL AND lon IS NOT NULL
                AND (role IS NULL OR role = 2)
                AND (name IS NULL OR name NOT LIKE '%🚫%')
                AND last_seen <= NOW() - INTERVAL '7 days'
                AND last_seen >  NOW() - INTERVAL '14 days'
-               ${nf}`, np),
+               ${filters.nodes}`, filters.params),
       query(`SELECT COUNT(*) AS count FROM nodes
              WHERE (name IS NULL OR name NOT LIKE '%🚫%')
                AND (role IS NULL OR role != 4)
-               ${nf}`, np),
+               ${filters.nodes}`, filters.params),
       query(`SELECT hop_count AS count,
                COALESCE(
                  CASE WHEN payload->>'hash' ~ '^[0-9A-Fa-f]{16}$' THEN payload->>'hash' END,
@@ -97,8 +111,8 @@ router.get('/stats', async (req, res) => {
              WHERE hop_count IS NOT NULL
                AND (payload->>'hash' ~ '^[0-9A-Fa-f]{16}$'
                     OR packet_hash   ~ '^[0-9A-Fa-f]{16}$')
-               ${pf}
-             ORDER BY hop_count DESC LIMIT 1`, np),
+               ${filters.packets}
+             ORDER BY hop_count DESC LIMIT 1`, filters.params),
     ]);
     res.json({
       mqttNodes:      Number(mqttCount.rows[0]?.count ?? 0),
@@ -119,16 +133,15 @@ router.get('/stats', async (req, res) => {
 router.get('/coverage', async (req, res) => {
   try {
     const network = req.query['network'] as string | undefined;
-    const nf     = network ? 'AND n.network = $1' : '';
-    const np     = network ? [network] : [];
+    const filters = networkFilters(network);
     const result = await query(
       `SELECT nc.node_id, nc.geom, nc.antenna_height_m, nc.radius_m, nc.calculated_at
        FROM node_coverage nc
        JOIN nodes n ON n.node_id = nc.node_id
        WHERE (n.name IS NULL OR n.name NOT LIKE '%🚫%')
          AND (n.role IS NULL OR n.role = 2)
-         ${nf}`,
-      np
+         ${filters.nodesAlias('n')}`,
+      filters.params
     );
     res.json(result.rows);
   } catch (err) {
@@ -151,12 +164,10 @@ router.get('/planned-nodes', async (_req, res) => {
 });
 
 // GET /api/stats/charts
-router.get('/stats/charts', async (_req, res) => {
+router.get('/stats/charts', async (req, res) => {
   try {
-    const network = _req.query['network'] as string | undefined;
-    const np  = network ? [network] : [];
-    const pf  = network ? 'AND network = $1' : '';
-    const nf  = network ? 'AND n.network = $1' : '';
+    const network = req.query['network'] as string | undefined;
+    const filters = networkFilters(network);
 
     const PAYLOAD_LABELS: Record<number, string> = {
       0: 'Request', 1: 'Response', 2: 'DM', 3: 'Ack',
@@ -172,37 +183,37 @@ router.get('/stats/charts', async (_req, res) => {
       query(`
         SELECT time_bucket('1 hour', time) AS hour, COUNT(DISTINCT packet_hash) AS count
         FROM packets
-        WHERE time > NOW() - INTERVAL '24 hours' ${pf}
+        WHERE time > NOW() - INTERVAL '24 hours' ${filters.packets}
         GROUP BY hour ORDER BY hour
-      `, np),
+      `, filters.params),
       // packets per day — last 7d (deduplicated by hash)
       query(`
         SELECT time_bucket('1 day', time) AS day, COUNT(DISTINCT packet_hash) AS count
         FROM packets
-        WHERE time > NOW() - INTERVAL '7 days' ${pf}
+        WHERE time > NOW() - INTERVAL '7 days' ${filters.packets}
         GROUP BY day ORDER BY day
-      `, np),
+      `, filters.params),
       // unique radios heard per hour — last 24h (distinct transmitting nodes)
       query(`
         SELECT time_bucket('1 hour', time) AS hour, COUNT(DISTINCT src_node_id) AS count
         FROM packets
-        WHERE time > NOW() - INTERVAL '24 hours' AND src_node_id IS NOT NULL ${pf}
+        WHERE time > NOW() - INTERVAL '24 hours' AND src_node_id IS NOT NULL ${filters.packets}
         GROUP BY hour ORDER BY hour
-      `, np),
+      `, filters.params),
       // unique radios heard per day — last 7d
       query(`
         SELECT time_bucket('1 day', time) AS day, COUNT(DISTINCT src_node_id) AS count
         FROM packets
-        WHERE time > NOW() - INTERVAL '7 days' AND src_node_id IS NOT NULL ${pf}
+        WHERE time > NOW() - INTERVAL '7 days' AND src_node_id IS NOT NULL ${filters.packets}
         GROUP BY day ORDER BY day
-      `, np),
+      `, filters.params),
       // packet types — last 24h (deduplicated by hash)
       query(`
         SELECT packet_type, COUNT(DISTINCT packet_hash) AS count
         FROM packets
-        WHERE time > NOW() - INTERVAL '24 hours' ${pf}
+        WHERE time > NOW() - INTERVAL '24 hours' ${filters.packets}
         GROUP BY packet_type ORDER BY count DESC
-      `, np),
+      `, filters.params),
       // total known repeaters at each hour — cumulative count from nodes.created_at — last 7d
       query(`
         WITH hours AS (
@@ -217,20 +228,20 @@ router.get('/stats/charts', async (_req, res) => {
            FROM nodes n
            WHERE (n.role IS NULL OR n.role = 2)
              AND (n.name IS NULL OR n.name NOT LIKE '%🚫%')
-             ${nf}
+             ${filters.nodesAlias('n')}
              AND n.created_at <= h.hour + INTERVAL '1 hour') AS count
         FROM hours h
         ORDER BY h.hour
-      `, np),
+      `, filters.params),
       // hop count distribution — last 7d (deduplicated by hash)
       query(`
         SELECT hop_count AS hops, COUNT(DISTINCT packet_hash) AS count
         FROM packets
         WHERE time > NOW() - INTERVAL '7 days'
           AND hop_count IS NOT NULL
-          ${pf}
+          ${filters.packets}
         GROUP BY hop_count ORDER BY hop_count
-      `, np),
+      `, filters.params),
       // top 10 public channel chatters by decoded sender name — last 7d (deduplicated by hash)
       query(`
         SELECT payload->'decrypted'->>'sender' AS name, COUNT(DISTINCT packet_hash) AS count
@@ -238,18 +249,18 @@ router.get('/stats/charts', async (_req, res) => {
         WHERE packet_type = 5
           AND time > NOW() - INTERVAL '7 days'
           AND payload->'decrypted'->>'sender' IS NOT NULL
-          ${pf}
+          ${filters.packets}
         GROUP BY 1 ORDER BY count DESC LIMIT 10
-      `, np),
+      `, filters.params),
       // summary
       query(`
         SELECT
-          (SELECT COUNT(DISTINCT packet_hash) FROM packets WHERE time > NOW() - INTERVAL '24 hours' ${pf}) AS total_24h,
-          (SELECT COUNT(DISTINCT packet_hash) FROM packets WHERE time > NOW() - INTERVAL '7 days' ${pf}) AS total_7d,
-          (SELECT COUNT(DISTINCT src_node_id) FROM packets WHERE time > NOW() - INTERVAL '24 hours' AND src_node_id IS NOT NULL ${pf}) AS unique_radios_24h,
-          (SELECT COUNT(*) FROM nodes n WHERE (n.role IS NULL OR n.role = 2) AND n.last_seen > NOW() - INTERVAL '7 days' ${nf}) AS active_repeaters,
-          (SELECT COUNT(*) FROM nodes n WHERE (n.role IS NULL OR n.role = 2) AND n.last_seen <= NOW() - INTERVAL '7 days' AND n.last_seen > NOW() - INTERVAL '14 days' ${nf}) AS stale_repeaters
-      `, np),
+          (SELECT COUNT(DISTINCT packet_hash) FROM packets WHERE time > NOW() - INTERVAL '24 hours' ${filters.packets}) AS total_24h,
+          (SELECT COUNT(DISTINCT packet_hash) FROM packets WHERE time > NOW() - INTERVAL '7 days' ${filters.packets}) AS total_7d,
+          (SELECT COUNT(DISTINCT src_node_id) FROM packets WHERE time > NOW() - INTERVAL '24 hours' AND src_node_id IS NOT NULL ${filters.packets}) AS unique_radios_24h,
+          (SELECT COUNT(*) FROM nodes n WHERE (n.role IS NULL OR n.role = 2) AND n.last_seen > NOW() - INTERVAL '7 days' ${filters.nodesAlias('n')}) AS active_repeaters,
+          (SELECT COUNT(*) FROM nodes n WHERE (n.role IS NULL OR n.role = 2) AND n.last_seen <= NOW() - INTERVAL '7 days' AND n.last_seen > NOW() - INTERVAL '14 days' ${filters.nodesAlias('n')}) AS stale_repeaters
+      `, filters.params),
     ]);
 
     const peakRow = phResult.rows.reduce(

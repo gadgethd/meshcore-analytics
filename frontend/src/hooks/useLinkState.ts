@@ -1,0 +1,73 @@
+import { useCallback, useState } from 'react';
+import { MIN_LINK_OBSERVATIONS, linkKey, type LinkMetrics } from '../utils/pathing.js';
+
+type LinkUpdate = {
+  node_a_id: string;
+  node_b_id: string;
+  observed_count: number;
+  itm_viable: boolean | null;
+  itm_path_loss_db?: number | null;
+  count_a_to_b?: number;
+  count_b_to_a?: number;
+};
+
+export function useLinkState() {
+  const [linkPairs, setLinkPairs] = useState<Set<string>>(new Set());
+  const [linkMetrics, setLinkMetrics] = useState<Map<string, LinkMetrics>>(new Map());
+  const [viablePairsArr, setViablePairsArr] = useState<[string, string][]>([]);
+
+  const applyInitialViablePairs = useCallback((viablePairs?: [string, string][]) => {
+    if (!viablePairs) return;
+
+    setLinkPairs(new Set(viablePairs.map(([a, b]) => linkKey(a, b))));
+    setLinkMetrics(() => {
+      const metrics = new Map<string, LinkMetrics>();
+      for (const [a, b] of viablePairs) {
+        metrics.set(linkKey(a, b), {
+          observed_count: MIN_LINK_OBSERVATIONS,
+          itm_viable: true,
+        });
+      }
+      return metrics;
+    });
+    setViablePairsArr(viablePairs);
+  }, []);
+
+  const applyLinkUpdate = useCallback((update: LinkUpdate) => {
+    const key = linkKey(update.node_a_id, update.node_b_id);
+    setLinkMetrics((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(key);
+      next.set(key, {
+        observed_count: Math.max(existing?.observed_count ?? 0, update.observed_count ?? 0),
+        itm_viable: update.itm_viable ?? existing?.itm_viable ?? null,
+        itm_path_loss_db: update.itm_path_loss_db ?? existing?.itm_path_loss_db ?? null,
+        count_a_to_b: update.count_a_to_b ?? existing?.count_a_to_b,
+        count_b_to_a: update.count_b_to_a ?? existing?.count_b_to_a,
+      });
+      return next;
+    });
+
+    if (update.itm_viable && update.observed_count >= MIN_LINK_OBSERVATIONS) {
+      setLinkPairs((prev) => {
+        if (prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
+      setViablePairsArr((prev) => {
+        if (prev.some(([a, b]) => linkKey(a, b) === key)) return prev;
+        return [...prev, [update.node_a_id, update.node_b_id]];
+      });
+    }
+  }, []);
+
+  return {
+    linkPairs,
+    linkMetrics,
+    viablePairsArr,
+    applyInitialViablePairs,
+    applyLinkUpdate,
+  };
+}
+

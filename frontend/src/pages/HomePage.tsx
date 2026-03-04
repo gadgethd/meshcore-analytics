@@ -1,57 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React from 'react';
 import { Link } from 'react-router-dom';
-
-interface SiteStats {
-  packetsDay:     number;
-  totalNodes:     number;
-  longestHop:     number;
-  longestHopHash: string | null;
-}
-
-function useFlash(value: number) {
-  const [flash, setFlash] = useState(false);
-  const prev = useRef(value);
-  useEffect(() => {
-    if (value !== prev.current) {
-      prev.current = value;
-      setFlash(true);
-      const t = setTimeout(() => setFlash(false), 600);
-      return () => clearTimeout(t);
-    }
-  }, [value]);
-  return flash;
-}
-
-const StatCard: React.FC<{ value: number; label: string; suffix?: string; format?: (n: number) => string }> = ({
-  value, label, suffix = '', format,
-}) => {
-  const flash = useFlash(value);
-  const display = format ? format(value) : value.toLocaleString();
-  return (
-    <div className="site-stat">
-      <span className={`site-stat__value${flash ? ' tick-flash' : ''}`}>
-        {display}{suffix && <span className="site-stat__suffix">{suffix}</span>}
-      </span>
-      <span className="site-stat__label">{label}</span>
-    </div>
-  );
-};
+import { LiveStatsSection } from '../components/LiveStatsSection.js';
+import { getCurrentSite } from '../config/site.js';
 
 export const HomePage: React.FC = () => {
-  const [stats, setStats] = useState<SiteStats>({ packetsDay: 0, totalNodes: 0, longestHop: 0, longestHopHash: null });
-  const hopFlash = useFlash(stats.longestHop);
-  const network = 'teesside';
-
-  useEffect(() => {
-    const fetch_ = () =>
-      fetch(`/api/stats?network=${network}`)
-        .then(r => r.json())
-        .then(d => setStats({ packetsDay: d.packetsDay, totalNodes: d.totalNodes, longestHop: d.longestHop, longestHopHash: d.longestHopHash ?? null }))
-        .catch(() => {});
-    fetch_();
-    const t = setInterval(fetch_, 30_000);
-    return () => clearInterval(t);
-  }, []);
+  const site = getCurrentSite();
 
   return (
     <>
@@ -70,33 +23,13 @@ export const HomePage: React.FC = () => {
             a free, open-source LoRa mesh platform. No internet. No infrastructure. Just radio.
           </p>
           <div className="site-hero__actions">
-            <a href="https://app.teessidemesh.com" className="site-btn site-btn--primary">Open Live Map →</a>
+            <a href={site.appUrl} className="site-btn site-btn--primary">Open Live Map →</a>
             <Link to="/about" className="site-btn site-btn--ghost">Learn more</Link>
           </div>
         </div>
       </section>
 
-      {/* ── Live stats ───────────────────────────────────────────────── */}
-      <section className="site-stats-section">
-        <div className="site-content">
-          <p className="site-stats-section__eyebrow">Live network stats · updates every 30s</p>
-          <div className="site-stats-grid">
-            <StatCard value={stats.packetsDay} label="Packets in the last 24 hours" />
-            <StatCard value={stats.totalNodes} label="Nodes ever heard on the network" />
-            <div className="site-stat">
-              <span className={`site-stat__value${hopFlash ? ' tick-flash' : ''}`}>
-                {stats.longestHop.toLocaleString()}<span className="site-stat__suffix"> hops</span>
-              </span>
-              <span className="site-stat__label">Longest relay chain ever recorded</span>
-              {stats.longestHopHash && (
-                <span className="site-stat__hash" title={stats.longestHopHash}>
-                  {stats.longestHopHash}
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      </section>
+      <LiveStatsSection network={site.network} />
 
       {/* ── Radio config ─────────────────────────────────────────────── */}
       <section className="site-stats-section site-stats-section--alt">
@@ -161,7 +94,7 @@ export const HomePage: React.FC = () => {
               relay paths, RF coverage, and a decoded packet feed. Built entirely on open
               source tools.
             </p>
-            <Link to="/app" className="site-card__link">Open map →</Link>
+            <a href={site.appUrl} className="site-card__link">Open map →</a>
           </div>
 
         </div>

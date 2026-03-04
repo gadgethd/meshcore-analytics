@@ -14,23 +14,24 @@ import { UKLayout } from './pages/ukmesh/UKLayout.js';
 import { UKHomePage } from './pages/ukmesh/UKHomePage.js';
 import { UKInstallPage } from './pages/ukmesh/UKInstallPage.js';
 import { UKMqttPage } from './pages/ukmesh/UKMqttPage.js';
+import { getCurrentSite } from './config/site.js';
 import './styles/globals.css';
 
 const root = document.getElementById('root')!;
 const { hostname } = window.location;
 const APP_HOSTNAME = import.meta.env['VITE_APP_HOSTNAME'];
-const SITE         = import.meta.env['VITE_SITE'] ?? 'teesside';
+const site = getCurrentSite();
 const isAppDomain  = !APP_HOSTNAME || hostname === APP_HOSTNAME;
 
 document.title = isAppDomain
   ? 'MeshCore Analytics'
-  : SITE === 'ukmesh' ? 'UK Mesh Network' : 'Teesside Mesh';
+  : site.footerName;
 
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
     {isAppDomain ? (
       <App />
-    ) : SITE === 'ukmesh' ? (
+    ) : site.id === 'ukmesh' ? (
       <BrowserRouter>
         <Routes>
           <Route element={<UKLayout />}>

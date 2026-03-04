@@ -4,6 +4,8 @@ import {
   PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
 } from 'recharts';
+import { getCurrentSite } from '../config/site.js';
+import { chartStatsEndpoint } from '../utils/api.js';
 
 // ── Colours ───────────────────────────────────────────────────────────────────
 const C_CYAN   = '#00c4ff';
@@ -92,10 +94,10 @@ export const StatsPage: React.FC = () => {
   const [data, setData]       = useState<ChartData | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
-  const network = (import.meta.env['VITE_SITE'] === 'ukmesh') ? 'ukmesh' : 'teesside';
+  const site = getCurrentSite();
 
   const load = () => {
-    fetch(`/api/stats/charts?network=${network}`)
+    fetch(chartStatsEndpoint(site.network))
       .then(r => r.json())
       .then((d: ChartData) => { setData(d); setLoading(false); setLastUpdate(new Date()); })
       .catch(() => setLoading(false));
@@ -116,7 +118,7 @@ export const StatsPage: React.FC = () => {
         <div className="site-content">
           <h1 className="site-page-hero__title">Network Stats</h1>
           <p className="site-page-hero__sub">
-            Live analytics from the Teesside Mesh network. Updates every 60 seconds.
+            Live analytics from the {site.displayName} network. Updates every 60 seconds.
           </p>
           {lastUpdate && (
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
