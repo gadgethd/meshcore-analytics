@@ -3,6 +3,7 @@ import { MapContainer, TileLayer, useMap, Pane, Polygon, Polyline } from 'react-
 import type { LatLngExpression, Map as LeafletMap, Polyline as LeafletPolyline } from 'leaflet';
 import type { MeshNode, PacketArc } from '../../hooks/useNodes.js';
 import type { NodeCoverage } from '../../hooks/useCoverage.js';
+import type { LinkMetrics } from '../../utils/pathing.js';
 import { NodeMarker } from './NodeMarker.js';
 import { PacketArcLayer } from './PacketArcLayer.js';
 import { NodeSearch } from './NodeSearch.js';
@@ -88,6 +89,7 @@ interface MapViewProps {
   showClientNodes: boolean;
   showLinks:       boolean;
   viablePairsArr:  [string, string][];
+  linkMetrics:     Map<string, LinkMetrics>;
   packetPath:      [number, number][] | null;
   betaPath:        [number, number][] | null;
   showBetaPaths:   boolean;
@@ -101,7 +103,7 @@ const DEFAULT_ZOOM = 11;
 
 export const MapView: React.FC<MapViewProps> = ({
   nodes, arcs, activeNodes, coverage, showPackets, showCoverage, showClientNodes,
-  showLinks, viablePairsArr, packetPath, betaPath, showBetaPaths, pathOpacity, onMapReady,
+  showLinks, viablePairsArr, linkMetrics, packetPath, betaPath, showBetaPaths, pathOpacity, onMapReady,
 }) => {
   const [map, setMap] = useState<LeafletMap | null>(null);
 
@@ -181,19 +183,49 @@ export const MapView: React.FC<MapViewProps> = ({
     return m;
   }, [coverage]);
 
+  const linkKey = (a: string, b: string) => (a < b ? `${a}:${b}` : `${b}:${a}`);
+
+  const linkColor = (pathLossDb: number | null | undefined) => {
+    if (pathLossDb == null) return '#fbbf24';
+    if (pathLossDb <= 120) return '#22c55e';
+    if (pathLossDb <= 135) return '#fbbf24';
+    return '#ef4444';
+  };
+
   // Resolve viable link pairs to lat/lon polyline positions
   const linkLines = useMemo(() => {
     if (!showLinks || viablePairsArr.length === 0) return [];
-    const lines: [number, number][][] = [];
+    const lines: Array<{
+      key: string;
+      positions: [number, number][];
+      observedCount: number;
+      pathLossDb: number | null | undefined;
+    }> = [];
     for (const [aId, bId] of viablePairsArr) {
       const a = nodes.get(aId);
       const b = nodes.get(bId);
-      if (hasCoords(a) && hasCoords(b)) {
-        lines.push([[a.lat, a.lon], [b.lat, b.lon]]);
+      if (
+        hasCoords(a)
+        && hasCoords(b)
+        && (Date.now() - new Date(a.last_seen).getTime()) < FOURTEEN_DAYS_MS
+        && (Date.now() - new Date(b.last_seen).getTime()) < FOURTEEN_DAYS_MS
+        && !a.name?.includes('🚫')
+        && !b.name?.includes('🚫')
+        && (a.role === undefined || a.role === 2)
+        && (b.role === undefined || b.role === 2)
+      ) {
+        const key = linkKey(aId, bId);
+        const metrics = linkMetrics.get(key);
+        lines.push({
+          key,
+          positions: [[a.lat, a.lon], [b.lat, b.lon]],
+          observedCount: metrics?.observed_count ?? 0,
+          pathLossDb: metrics?.itm_path_loss_db,
+        });
       }
     }
     return lines;
-  }, [showLinks, viablePairsArr, nodes]);
+  }, [showLinks, viablePairsArr, nodes, linkMetrics]);
 
   return (
     <div className="map-area">
@@ -240,18 +272,24 @@ export const MapView: React.FC<MapViewProps> = ({
         {/* Confirmed link lines — ITM-viable node pairs */}
         {showLinks && linkLines.length > 0 && (
           <Pane name="linksPane" style={{ zIndex: 400 }}>
-            {linkLines.map((positions, i) => (
+            {linkLines.map((line) => {
+              const obs = Math.max(1, line.observedCount);
+              const strength = Math.log10(obs + 1);
+              const opacity = Math.min(0.85, 0.35 + strength * 0.22);
+              const weight = Math.min(3.2, 1.0 + strength * 1.1);
+              return (
               <Polyline
-                key={i}
-                positions={positions}
+                key={line.key}
+                positions={line.positions}
                 pathOptions={{
-                  color:   '#fbbf24',
-                  weight:  1.5,
-                  opacity: 0.55,
+                  color: linkColor(line.pathLossDb),
+                  weight,
+                  opacity,
                 }}
                 interactive={false}
               />
-            ))}
+              );
+            })}
           </Pane>
         )}
 

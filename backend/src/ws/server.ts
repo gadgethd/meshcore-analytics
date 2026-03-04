@@ -54,7 +54,7 @@ export function initWebSocketServer(httpServer: Server): WebSocketServer {
     // Send initial state: known nodes + last 5 minutes of packets
     try {
       const [nodes, packets, viablePairs] = await Promise.all([
-        getNodes(network), getLastNPackets(10, network), getViableLinkPairs(),
+        getNodes(network), getLastNPackets(10, network), getViableLinkPairs(network),
       ]);
       const initMsg: WSMessage = {
         type: 'initial_state',

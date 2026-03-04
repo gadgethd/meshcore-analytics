@@ -137,6 +137,7 @@ export const App: React.FC = () => {
         showClientNodes={filters.clientNodes}
         showLinks={filters.links}
         viablePairsArr={viablePairsArr}
+        linkMetrics={linkMetrics}
         packetPath={packetPath}
         betaPath={betaPacketPath}
         showBetaPaths={filters.betaPaths || pinnedPacketId !== null}
