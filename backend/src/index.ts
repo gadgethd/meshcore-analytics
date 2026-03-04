@@ -7,6 +7,7 @@ import { initDb, query } from './db/index.js';
 import { startMqttClient, onPacket, onNodeSeen, onNodeUpsert, backfillHistoricalLinks } from './mqtt/client.js';
 import { initWebSocketServer, broadcastPacket, broadcastNodeUpdate, broadcastNodeUpsert, queueViewshedJob, queueLinkJob } from './ws/server.js';
 import apiRoutes from './api/routes.js';
+import { rebuildPathLearningModels } from './path-learning/rebuild.js';
 
 const ALLOWED_ORIGINS = (process.env['ALLOWED_ORIGINS'] ?? '')
   .split(',')
@@ -110,6 +111,21 @@ async function main() {
       console.log('[app] node_links already populated, skipping historical backfill');
     }
   });
+
+  // 7. Build path-learning priors from historical packets.
+  process.nextTick(async () => {
+    try {
+      await rebuildPathLearningModels();
+    } catch (err) {
+      console.error('[path-learning] initial rebuild failed', (err as Error).message);
+    }
+  });
+
+  setInterval(() => {
+    void rebuildPathLearningModels().catch((err) => {
+      console.error('[path-learning] scheduled rebuild failed', (err as Error).message);
+    });
+  }, 60 * 60 * 1000);
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[app] listening on http://0.0.0.0:${PORT}`);

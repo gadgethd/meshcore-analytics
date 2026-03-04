@@ -123,3 +123,42 @@ CREATE TABLE IF NOT EXISTS node_coverage (
   radius_m         DOUBLE PRECISION DEFAULT 30000,
   calculated_at    TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ─── Learned path priors from historical packets ─────────────────────────────
+
+CREATE TABLE IF NOT EXISTS path_prefix_priors (
+  network         TEXT        NOT NULL,
+  prefix          TEXT        NOT NULL,
+  receiver_region TEXT        NOT NULL,
+  prev_prefix     TEXT,
+  node_id         TEXT        NOT NULL,
+  count           INTEGER     NOT NULL,
+  probability     DOUBLE PRECISION NOT NULL,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (network, prefix, receiver_region, prev_prefix, node_id)
+);
+CREATE INDEX IF NOT EXISTS path_prefix_priors_lookup_idx
+  ON path_prefix_priors(network, receiver_region, prefix);
+
+CREATE TABLE IF NOT EXISTS path_transition_priors (
+  network         TEXT        NOT NULL,
+  from_node_id    TEXT        NOT NULL,
+  to_node_id      TEXT        NOT NULL,
+  receiver_region TEXT        NOT NULL,
+  count           INTEGER     NOT NULL,
+  probability     DOUBLE PRECISION NOT NULL,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (network, from_node_id, to_node_id, receiver_region)
+);
+CREATE INDEX IF NOT EXISTS path_transition_priors_lookup_idx
+  ON path_transition_priors(network, receiver_region, from_node_id);
+
+CREATE TABLE IF NOT EXISTS path_model_calibration (
+  network               TEXT PRIMARY KEY,
+  evaluated_packets     INTEGER NOT NULL DEFAULT 0,
+  top1_accuracy         DOUBLE PRECISION NOT NULL DEFAULT 0,
+  mean_pred_confidence  DOUBLE PRECISION NOT NULL DEFAULT 0,
+  confidence_scale      DOUBLE PRECISION NOT NULL DEFAULT 1,
+  recommended_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

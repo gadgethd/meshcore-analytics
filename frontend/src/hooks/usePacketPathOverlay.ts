@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AggregatedPacket, MeshNode } from './useNodes.js';
 import type { NodeCoverage } from './useCoverage.js';
-import { hasCoords, resolveBetaPath, resolvePathWaypoints, type LinkMetrics } from '../utils/pathing.js';
+import { hasCoords, resolveBetaPath, type LinkMetrics, type PathLearningModel, resolvePathWaypoints } from '../utils/pathing.js';
 import type { Filters } from '../components/FilterPanel/FilterPanel.js';
 
 const PATH_TTL = 5_000;
@@ -12,6 +12,7 @@ type UsePacketPathOverlayParams = {
   coverage: NodeCoverage[];
   linkPairs: Set<string>;
   linkMetrics: Map<string, LinkMetrics>;
+  learningModel: PathLearningModel | null;
   filters: Filters;
 };
 
@@ -29,6 +30,7 @@ export function usePacketPathOverlay({
   coverage,
   linkPairs,
   linkMetrics,
+  learningModel,
   filters,
 }: UsePacketPathOverlayParams): UsePacketPathOverlayResult {
   const [packetPath, setPacketPath] = useState<[number, number][] | null>(null);
@@ -39,6 +41,7 @@ export function usePacketPathOverlay({
   const pinnedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pathTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pathFadeRef = useRef<number | null>(null);
+  const recentPredictionsRef = useRef<Map<string, { path: [number, number][]; ts: number }>>(new Map());
 
   const stopPathTimers = useCallback(() => {
     if (pathTimerRef.current) {
@@ -79,6 +82,7 @@ export function usePacketPathOverlay({
     if (filters.betaPaths && latest?.rxNodeId && latest.path?.length && hasCoords(rx)) {
       const src = latest.srcNodeId ? (nodes.get(latest.srcNodeId) ?? null) : null;
       const hops = latest.hopCount != null ? latest.path.slice(0, latest.hopCount) : latest.path;
+      const pairKey = `${src?.node_id ?? 'unknown'}>${rx.node_id}`;
       const result = resolveBetaPath(
         hops,
         hasCoords(src) ? src : null,
@@ -87,8 +91,19 @@ export function usePacketPathOverlay({
         coverage,
         linkPairs,
         linkMetrics,
+        learningModel,
       );
-      setBetaPacketPath(result && result.confidence >= filters.betaPathThreshold ? result.path : null);
+      if (result && result.confidence >= filters.betaPathThreshold) {
+        recentPredictionsRef.current.set(pairKey, { path: result.path, ts: Date.now() });
+        setBetaPacketPath(result.path);
+      } else {
+        const recent = recentPredictionsRef.current.get(pairKey);
+        if (recent && Date.now() - recent.ts < 45_000) {
+          setBetaPacketPath(recent.path);
+        } else {
+          setBetaPacketPath(null);
+        }
+      }
     } else {
       setBetaPacketPath(null);
     }
@@ -113,7 +128,7 @@ export function usePacketPathOverlay({
       pathFadeRef.current = requestAnimationFrame(animate);
     }, PATH_TTL - 1_000);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [latestId, filters.packetPaths, filters.betaPaths, pinnedPacketId, linkMetrics]);
+  }, [latestId, filters.packetPaths, filters.betaPaths, pinnedPacketId, linkMetrics, learningModel, filters.betaPathThreshold]);
 
   const handlePacketPin = useCallback((packet: AggregatedPacket) => {
     if (pinnedPacketId === packet.id) {
@@ -140,6 +155,7 @@ export function usePacketPathOverlay({
     if (packet.rxNodeId && packet.path?.length && hasCoords(rx)) {
       const src = packet.srcNodeId ? (nodes.get(packet.srcNodeId) ?? null) : null;
       const hops = packet.hopCount != null ? packet.path.slice(0, packet.hopCount) : packet.path;
+      const pairKey = `${src?.node_id ?? 'unknown'}>${rx.node_id}`;
       const result = resolveBetaPath(
         hops,
         hasCoords(src) ? src : null,
@@ -148,8 +164,19 @@ export function usePacketPathOverlay({
         coverage,
         linkPairs,
         linkMetrics,
+        learningModel,
       );
-      setBetaPacketPath(result && result.confidence >= filters.betaPathThreshold ? result.path : null);
+      if (result && result.confidence >= filters.betaPathThreshold) {
+        recentPredictionsRef.current.set(pairKey, { path: result.path, ts: Date.now() });
+        setBetaPacketPath(result.path);
+      } else {
+        const recent = recentPredictionsRef.current.get(pairKey);
+        if (recent && Date.now() - recent.ts < 45_000) {
+          setBetaPacketPath(recent.path);
+        } else {
+          setBetaPacketPath(null);
+        }
+      }
     } else {
       setBetaPacketPath(null);
     }
@@ -175,7 +202,7 @@ export function usePacketPathOverlay({
       pathFadeRef.current = requestAnimationFrame(animate);
     }, 30_000);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pinnedPacketId, nodes, coverage, linkPairs, linkMetrics, filters.betaPathThreshold, stopPathTimers, clearPathState]);
+  }, [pinnedPacketId, nodes, coverage, linkPairs, linkMetrics, learningModel, filters.betaPathThreshold, stopPathTimers, clearPathState]);
 
   useEffect(() => () => {
     stopPathTimers();
@@ -190,4 +217,3 @@ export function usePacketPathOverlay({
     handlePacketPin,
   };
 }
-

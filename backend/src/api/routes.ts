@@ -163,6 +163,74 @@ router.get('/planned-nodes', async (_req, res) => {
   }
 });
 
+// GET /api/path-learning
+router.get('/path-learning', async (req, res) => {
+  try {
+    const network = (req.query['network'] as string | undefined) ?? 'teesside';
+    const [prefixRows, transitionRows, calibrationRows] = await Promise.all([
+      query<{
+        prefix: string;
+        receiver_region: string;
+        prev_prefix: string | null;
+        node_id: string;
+        probability: number;
+        count: number;
+      }>(
+        `SELECT prefix, receiver_region, prev_prefix, node_id, probability, count
+         FROM path_prefix_priors
+         WHERE network = $1
+         ORDER BY count DESC
+         LIMIT 8000`,
+        [network],
+      ),
+      query<{
+        from_node_id: string;
+        to_node_id: string;
+        receiver_region: string;
+        probability: number;
+        count: number;
+      }>(
+        `SELECT from_node_id, to_node_id, receiver_region, probability, count
+         FROM path_transition_priors
+         WHERE network = $1
+         ORDER BY count DESC
+         LIMIT 8000`,
+        [network],
+      ),
+      query<{
+        evaluated_packets: number;
+        top1_accuracy: number;
+        mean_pred_confidence: number;
+        confidence_scale: number;
+        recommended_threshold: number;
+      }>(
+        `SELECT evaluated_packets, top1_accuracy, mean_pred_confidence, confidence_scale, recommended_threshold
+         FROM path_model_calibration
+         WHERE network = $1`,
+        [network],
+      ),
+    ]);
+
+    const calibration = calibrationRows.rows[0] ?? {
+      evaluated_packets: 0,
+      top1_accuracy: 0,
+      mean_pred_confidence: 0,
+      confidence_scale: 1,
+      recommended_threshold: 0.5,
+    };
+
+    res.json({
+      network,
+      calibration,
+      prefixPriors: prefixRows.rows,
+      transitionPriors: transitionRows.rows,
+    });
+  } catch (err) {
+    console.error('[api] GET /path-learning', (err as Error).message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /api/stats/charts
 router.get('/stats/charts', async (req, res) => {
   try {

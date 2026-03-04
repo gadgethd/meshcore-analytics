@@ -12,6 +12,13 @@ export type LinkMetrics = {
   count_b_to_a?: number;
 };
 
+export type PathLearningModel = {
+  prefixProbabilities: Map<string, number>;
+  transitionProbabilities: Map<string, number>;
+  confidenceScale: number;
+  recommendedThreshold: number;
+};
+
 export function linkKey(a: string, b: string): string {
   return a < b ? `${a}:${b}` : `${b}:${a}`;
 }
@@ -108,6 +115,7 @@ export function resolveBetaPath(
   coverage: NodeCoverage[],
   linkPairs: Set<string>,
   linkMetrics: Map<string, LinkMetrics>,
+  learningModel?: PathLearningModel | null,
 ): { path: [number, number][]; confidence: number } | null {
   if (!hasCoords(rx) || pathHashes.length === 0) return null;
   if (pathHashes.length >= MAX_BETA_HOPS) return null;
@@ -126,6 +134,38 @@ export function resolveBetaPath(
 
   const totalDist = hasCoords(src) ? distKm(src, rx) : 0;
   const corridorMaxKm = Math.max(8, Math.min(35, totalDist * 0.25));
+  const receiverRegion = rx.iata ?? 'unknown';
+
+  function prefixPrior(prefix: string, prevPrefix: string, nodeId: string): number {
+    if (!learningModel) return 0;
+    const exactKey = `${receiverRegion}|${prefix}|${prevPrefix}|${nodeId}`;
+    const regionOnlyKey = `unknown|${prefix}|${prevPrefix}|${nodeId}`;
+    const noPrevKey = `${receiverRegion}|${prefix}||${nodeId}`;
+    const noPrevFallbackKey = `unknown|${prefix}||${nodeId}`;
+    return learningModel.prefixProbabilities.get(exactKey)
+      ?? learningModel.prefixProbabilities.get(regionOnlyKey)
+      ?? learningModel.prefixProbabilities.get(noPrevKey)
+      ?? learningModel.prefixProbabilities.get(noPrevFallbackKey)
+      ?? 0;
+  }
+
+  function transitionPrior(fromId: string, toId: string): number {
+    if (!learningModel) return 0;
+    const key = `${receiverRegion}|${fromId}|${toId}`;
+    const fallback = `unknown|${fromId}|${toId}`;
+    return learningModel.transitionProbabilities.get(key)
+      ?? learningModel.transitionProbabilities.get(fallback)
+      ?? 0;
+  }
+
+  function distanceElevationPrior(a: MeshNode, b: MeshNode): number {
+    const d = distKm(a, b);
+    const distScore = Math.exp(-d / 22);
+    const elevA = a.elevation_m ?? 0;
+    const elevB = b.elevation_m ?? 0;
+    const elevScore = Math.min(1, Math.max(0, (Math.min(elevA, elevB) + 60) / 320));
+    return 0.65 * distScore + 0.35 * elevScore;
+  }
 
   function inCorridor(candidate: MeshNode, prevNode: MeshNode): boolean {
     if (!hasCoords(src)) return true;
@@ -162,18 +202,18 @@ export function resolveBetaPath(
     return forward / total;
   }
 
-  function confirmedConfidence(meta: LinkMetrics | undefined, fromId: string, toId: string): number {
+  function confirmedConfidence(meta: LinkMetrics | undefined, fromId: string, toId: string, prefixBoost: number, transitionBoost: number): number {
     const observed = meta?.observed_count ?? MIN_LINK_OBSERVATIONS;
     const obsBoost = Math.min(0.18, Math.log10(1 + observed) * 0.12);
     const pathLoss = meta?.itm_path_loss_db;
     const plPenalty = pathLoss == null ? 0 : Math.min(0.12, Math.max(0, (pathLoss - 130) / 120));
     const dirBoost = (directionalSupport(meta, fromId, toId) - 0.5) * 0.12;
     const viableBoost = meta?.itm_viable === false ? -0.1 : 0.05;
-    const conf = 0.68 + obsBoost + dirBoost + viableBoost - plPenalty;
+    const conf = 0.68 + obsBoost + dirBoost + viableBoost - plPenalty + prefixBoost + transitionBoost;
     return Math.max(0.45, Math.min(0.98, conf));
   }
 
-  function getCandidates(prefix: string, prevNode: MeshNode): Array<{ node: MeshNode; conf: number }> {
+  function getCandidates(prefix: string, prevPrefix: string, prevNode: MeshNode): Array<{ node: MeshNode; conf: number }> {
     const all = candidatesPool.filter((n) => n.node_id.toUpperCase().startsWith(prefix));
     if (all.length === 0) return [];
 
@@ -202,7 +242,9 @@ export function resolveBetaPath(
       .map((c) => {
         usedIds.add(c.node_id);
         const meta = linkMetrics.get(linkKey(c.node_id, prevNode.node_id));
-        return { node: c, conf: confirmedConfidence(meta, c.node_id, prevNode.node_id) };
+        const priorBoost = prefixPrior(prefix, prevPrefix, c.node_id) * 0.2;
+        const transitionBoost = transitionPrior(c.node_id, prevNode.node_id) * 0.24;
+        return { node: c, conf: confirmedConfidence(meta, c.node_id, prevNode.node_id, priorBoost, transitionBoost) };
       });
 
     const reachable = all
@@ -212,14 +254,25 @@ export function resolveBetaPath(
       .map((c) => {
         usedIds.add(c.node_id);
         const distancePenalty = Math.min(0.12, distKm(c, prevNode) / 120);
-        return { node: c, conf: Math.max(0.08, 0.28 - distancePenalty - (all.length - 1) * 0.01) };
+        const prior = distanceElevationPrior(c, prevNode);
+        const prefixBoost = prefixPrior(prefix, prevPrefix, c.node_id) * 0.22;
+        const transitionBoost = transitionPrior(c.node_id, prevNode.node_id) * 0.25;
+        return {
+          node: c,
+          conf: Math.max(0.08, 0.22 + prior * 0.36 + prefixBoost + transitionBoost - distancePenalty - (all.length - 1) * 0.01),
+        };
       });
 
     const fallback = all
       .filter((c) => !usedIds.has(c.node_id) && inCorridor(c, prevNode) && distKm(c, prevNode) < 50 && hasLoS(c, prevNode))
       .sort((a, b) => sortScore(b) - sortScore(a))
       .slice(0, 1)
-      .map((c) => ({ node: c, conf: 0.05 / Math.max(1, all.length) }));
+      .map((c) => {
+        const prior = distanceElevationPrior(c, prevNode);
+        const prefixBoost = prefixPrior(prefix, prevPrefix, c.node_id) * 0.16;
+        const transitionBoost = transitionPrior(c.node_id, prevNode.node_id) * 0.16;
+        return { node: c, conf: Math.max(0.03, 0.04 + prior * 0.2 + prefixBoost + transitionBoost) / Math.max(1, all.length) };
+      });
 
     return [...confirmed, ...reachable, ...fallback];
   }
@@ -236,7 +289,8 @@ export function resolveBetaPath(
     if (--budget <= 0) return null;
 
     const prefix = pathHashes[hopIdx]!.slice(0, 2).toUpperCase();
-    const options = getCandidates(prefix, prevNode).filter((o) => !visited.has(o.node.node_id));
+    const prevPrefix = hopIdx > 0 ? pathHashes[hopIdx - 1]!.slice(0, 2).toUpperCase() : '';
+    const options = getCandidates(prefix, prevPrefix, prevNode).filter((o) => !visited.has(o.node.node_id));
 
     for (const opt of options) {
       const nextVisited = new Set(visited);
@@ -264,7 +318,8 @@ export function resolveBetaPath(
   const meanHopConfidence = hops.reduce((sum, h) => sum + h.conf, 0) / hops.length;
   const resolvedRatio = hops.length / totalHops;
   const skipPenalty = Math.max(0.2, 1 - skipped * 0.28);
-  const confidence = Math.max(0, Math.min(1, meanHopConfidence * resolvedRatio * skipPenalty));
+  const scaledConfidence = meanHopConfidence * resolvedRatio * skipPenalty * (learningModel?.confidenceScale ?? 1);
+  const confidence = Math.max(0, Math.min(1, scaledConfidence));
 
   const pathNodes: MeshNode[] = [
     ...(hasCoords(src) ? [src] : []),

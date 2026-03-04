@@ -13,6 +13,7 @@ import { useDashboardStats } from './hooks/useDashboardStats.js';
 import { useLinkState } from './hooks/useLinkState.js';
 import { usePacketPathOverlay } from './hooks/usePacketPathOverlay.js';
 import { useAppMessageHandler } from './hooks/useAppMessageHandler.js';
+import { usePathLearningModel } from './hooks/usePathLearningModel.js';
 import { getCurrentSite } from './config/site.js';
 import { hasCoords } from './utils/pathing.js';
 
@@ -51,6 +52,17 @@ export const App: React.FC = () => {
 
   const { coverage, handleCoverageUpdate } = useCoverage(networkFilter);
   const stats = useDashboardStats(networkFilter);
+  const learningModelNetwork = import.meta.env['VITE_NETWORK'] === 'ukmesh' ? 'all' : site.network;
+  const learningModel = usePathLearningModel(learningModelNetwork);
+
+  useEffect(() => {
+    if (!learningModel) return;
+    setFilters((current) => {
+      const tuned = Math.min(0.9, Math.max(0.25, learningModel.recommendedThreshold));
+      if (Math.abs(current.betaPathThreshold - tuned) < 0.01) return current;
+      return { ...current, betaPathThreshold: tuned };
+    });
+  }, [learningModel]);
 
   const {
     linkPairs,
@@ -72,6 +84,7 @@ export const App: React.FC = () => {
     coverage,
     linkPairs,
     linkMetrics,
+    learningModel,
     filters,
   });
 
