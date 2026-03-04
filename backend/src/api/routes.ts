@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getNodes, getNodeHistory, getRecentPackets, query } from '../db/index.js';
+import { getNodes, getNodeHistory, getRecentPackets, query, MIN_LINK_OBSERVATIONS } from '../db/index.js';
 
 const router = Router();
 
@@ -32,9 +32,9 @@ router.get('/nodes/:id/links', async (req, res) => {
          CASE WHEN node_a_id = $1 THEN count_b_to_a ELSE count_a_to_b END AS count_peer_to_this
        FROM node_links
        LEFT JOIN nodes n ON n.node_id = CASE WHEN node_a_id = $1 THEN node_b_id ELSE node_a_id END
-       WHERE (node_a_id = $1 OR node_b_id = $1) AND itm_viable = true
+       WHERE (node_a_id = $1 OR node_b_id = $1) AND itm_viable = true AND observed_count >= $2
        ORDER BY observed_count DESC`,
-      [id],
+      [id, MIN_LINK_OBSERVATIONS],
     );
     res.json(result.rows);
   } catch (err) {
