@@ -82,16 +82,17 @@ export async function insertPacket(p: {
   rawHex: string;
   advertCount?: number;
   pathHashes?: string[];
+  network?: string;
 }): Promise<void> {
   await pool.query(
     `INSERT INTO packets
        (time, packet_hash, rx_node_id, src_node_id, topic, packet_type, route_type,
-        hop_count, rssi, snr, payload, raw_hex, advert_count, path_hashes)
-     VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        hop_count, rssi, snr, payload, raw_hex, advert_count, path_hashes, network)
+     VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
     [p.packetHash, p.rxNodeId, p.srcNodeId, p.topic, p.packetType,
      p.routeType, p.hopCount, p.rssi, p.snr,
      p.payload ? JSON.stringify(p.payload) : null, p.rawHex, p.advertCount ?? null,
-     p.pathHashes ?? null]
+     p.pathHashes ?? null, p.network ?? 'teesside']
   );
 }
 

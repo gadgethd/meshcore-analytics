@@ -83,6 +83,7 @@ END $$;
 
 ALTER TABLE packets ADD COLUMN IF NOT EXISTS advert_count INTEGER;
 ALTER TABLE packets ADD COLUMN IF NOT EXISTS path_hashes TEXT[];
+ALTER TABLE packets ADD COLUMN IF NOT EXISTS network      TEXT NOT NULL DEFAULT 'teesside';
 
 -- Indexes for common query patterns
 CREATE INDEX IF NOT EXISTS packets_hash_idx   ON packets (packet_hash, time DESC);
