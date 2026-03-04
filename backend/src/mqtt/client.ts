@@ -231,6 +231,7 @@ async function handleMessage(topic: string, rawPayload: Buffer): Promise<void> {
       publicKey:       originId,
       hardwareModel:   (model    && model    !== 'unknown') ? model    : undefined,
       firmwareVersion: (firmware && firmware !== 'unknown') ? firmware : undefined,
+      network,
     });
     emitNode(nodeId);
     return;
@@ -286,6 +287,7 @@ async function handleMessage(topic: string, rawPayload: Buffer): Promise<void> {
             role:      appData?.['deviceRole'] as number | undefined,
             iata,
             publicKey: senderKey,
+            network,
           });
 
           // Only count each unique advert once — relay copies share the same decoded hash.
@@ -330,7 +332,7 @@ async function handleMessage(topic: string, rawPayload: Buffer): Promise<void> {
   const finalHash = decodedHash ?? (json['hash'] as string | undefined) ?? crypto.randomUUID();
 
   // Keep observer last-seen current
-  void upsertNode(observerKey, { iata });
+  void upsertNode(observerKey, { iata, network });
   emitNode(observerKey);
 
   {

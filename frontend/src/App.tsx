@@ -321,7 +321,10 @@ export const App: React.FC = () => {
     handleInitialState, handlePacket, handleNodeUpdate, handleNodeUpsert,
   } = useNodes();
 
-  const { coverage, handleCoverageUpdate } = useCoverage();
+  // 'ukmesh' build sees all data; teesside/default build filters to its own network
+  const networkFilter = import.meta.env['VITE_NETWORK'] === 'ukmesh' ? undefined : 'teesside';
+
+  const { coverage, handleCoverageUpdate } = useCoverage(networkFilter);
 
   const mapNodes = useMemo(() => Array.from(nodes.values()).filter(
     (n) => n.lat && n.lon
@@ -346,7 +349,8 @@ export const App: React.FC = () => {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const res = await fetch('/api/stats');
+        const statsUrl = networkFilter ? `/api/stats?network=${networkFilter}` : '/api/stats';
+        const res = await fetch(statsUrl);
         if (res.ok) setStats(await res.json() as typeof stats);
       } catch { /* ignore */ }
     };
@@ -515,7 +519,7 @@ export const App: React.FC = () => {
     }
   }, [handleInitialState, handlePacket, handleNodeUpdate, handleNodeUpsert, handleCoverageUpdate]);
 
-  const wsState = useWebSocket(handleMessage);
+  const wsState = useWebSocket(handleMessage, networkFilter);
 
   return (
     <div className="app-shell">

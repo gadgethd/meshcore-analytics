@@ -68,20 +68,26 @@ router.get('/packets/recent', async (req, res) => {
 });
 
 // GET /api/stats
-router.get('/stats', async (_req, res) => {
+router.get('/stats', async (req, res) => {
   try {
+    const network = req.query['network'] as string | undefined;
+    const np  = network ? [network] : [];       // params array
+    const pf  = network ? 'AND network = $1' : '';  // packets filter
+    const nf  = network ? 'AND network = $1' : '';  // nodes filter
     const [mqttCount, packetCount, staleCount, totalNodeCount, longestHopCount] = await Promise.all([
-      query("SELECT COUNT(DISTINCT rx_node_id) AS count FROM packets WHERE time > NOW() - INTERVAL '10 minutes' AND rx_node_id IS NOT NULL"),
-      query("SELECT COUNT(DISTINCT packet_hash) AS count FROM packets WHERE time > NOW() - INTERVAL '24 hours'"),
+      query(`SELECT COUNT(DISTINCT rx_node_id) AS count FROM packets WHERE time > NOW() - INTERVAL '10 minutes' AND rx_node_id IS NOT NULL ${pf}`, np),
+      query(`SELECT COUNT(DISTINCT packet_hash) AS count FROM packets WHERE time > NOW() - INTERVAL '24 hours' ${pf}`, np),
       query(`SELECT COUNT(*) AS count FROM nodes
              WHERE lat IS NOT NULL AND lon IS NOT NULL
                AND (role IS NULL OR role = 2)
                AND (name IS NULL OR name NOT LIKE '%🚫%')
                AND last_seen <= NOW() - INTERVAL '7 days'
-               AND last_seen >  NOW() - INTERVAL '14 days'`),
+               AND last_seen >  NOW() - INTERVAL '14 days'
+               ${nf}`, np),
       query(`SELECT COUNT(*) AS count FROM nodes
              WHERE (name IS NULL OR name NOT LIKE '%🚫%')
-               AND (role IS NULL OR role != 4)`),
+               AND (role IS NULL OR role != 4)
+               ${nf}`, np),
       query(`SELECT hop_count AS count,
                COALESCE(
                  CASE WHEN payload->>'hash' ~ '^[0-9A-Fa-f]{16}$' THEN payload->>'hash' END,
@@ -91,7 +97,8 @@ router.get('/stats', async (_req, res) => {
              WHERE hop_count IS NOT NULL
                AND (payload->>'hash' ~ '^[0-9A-Fa-f]{16}$'
                     OR packet_hash   ~ '^[0-9A-Fa-f]{16}$')
-             ORDER BY hop_count DESC LIMIT 1`),
+               ${pf}
+             ORDER BY hop_count DESC LIMIT 1`, np),
     ]);
     res.json({
       mqttNodes:      Number(mqttCount.rows[0]?.count ?? 0),
@@ -109,14 +116,19 @@ router.get('/stats', async (_req, res) => {
 
 
 // GET /api/coverage — all stored viewshed polygons (excludes hidden 🚫 nodes)
-router.get('/coverage', async (_req, res) => {
+router.get('/coverage', async (req, res) => {
   try {
+    const network = req.query['network'] as string | undefined;
+    const nf     = network ? 'AND n.network = $1' : '';
+    const np     = network ? [network] : [];
     const result = await query(
       `SELECT nc.node_id, nc.geom, nc.antenna_height_m, nc.radius_m, nc.calculated_at
        FROM node_coverage nc
        JOIN nodes n ON n.node_id = nc.node_id
        WHERE (n.name IS NULL OR n.name NOT LIKE '%🚫%')
-         AND (n.role IS NULL OR n.role = 2)`
+         AND (n.role IS NULL OR n.role = 2)
+         ${nf}`,
+      np
     );
     res.json(result.rows);
   } catch (err) {

@@ -44,13 +44,17 @@ export function initWebSocketServer(httpServer: Server): WebSocketServer {
     },
   });
 
-  wss.on('connection', async (ws: WebSocket, _req: IncomingMessage) => {
+  wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
     console.log('[ws] client connected, total:', wss.clients.size);
+
+    // Derive network filter from query param (?network=teesside)
+    const reqUrl  = new URL(req.url ?? '/', 'http://localhost');
+    const network = reqUrl.searchParams.get('network') ?? undefined;
 
     // Send initial state: known nodes + last 5 minutes of packets
     try {
       const [nodes, packets, viablePairs] = await Promise.all([
-        getNodes(), getLastNPackets(10), getViableLinkPairs(),
+        getNodes(network), getLastNPackets(10, network), getViableLinkPairs(),
       ]);
       const initMsg: WSMessage = {
         type: 'initial_state',

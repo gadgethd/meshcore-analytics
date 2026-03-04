@@ -8,16 +8,17 @@ export interface NodeCoverage {
   calculated_at?:   string;
 }
 
-export function useCoverage() {
+export function useCoverage(network?: string) {
   const [coverage, setCoverage] = useState<NodeCoverage[]>([]);
 
   // Fetch all stored polygons on mount
   useEffect(() => {
-    fetch('/api/coverage')
+    const url = network ? `/api/coverage?network=${encodeURIComponent(network)}` : '/api/coverage';
+    fetch(url)
       .then((r) => r.json())
       .then((data: NodeCoverage[]) => setCoverage(data))
       .catch(() => { /* non-fatal */ });
-  }, []);
+  }, [network]);
 
   // Called when a coverage_update WS message arrives
   const handleCoverageUpdate = useCallback((update: { node_id: string; geom: NodeCoverage['geom'] }) => {

@@ -128,32 +128,37 @@ export const UKMqttPage: React.FC = () => (
 
         <h3>Add the UK Mesh broker</h3>
         <p>
-          When asked if you'd like to configure additional MQTT brokers, choose <strong>y</strong>{' '}
-          and add <strong>1</strong> broker. Enter the following details using the credentials
-          you received from ibengr:
+          The UK Mesh broker uses a custom topic prefix that the interactive installer does not
+          support. Skip adding it through the installer and add it manually instead. Open (or
+          create) <code>/etc/mctomqtt/config.d/00-user.toml</code> and append the following block,
+          substituting your credentials and the IATA code from step 2:
         </p>
         <div className="code-block">
-          <pre>{`Server hostname/IP: mqtt.ukmesh.com
-Port [1883]: 443
-Use WebSockets transport? [y/N]: y
-Use TLS/SSL encryption? [y/N]: y
-Verify TLS certificates? [Y/n]: y
-Choose authentication method [1-3] [1]: 1
-Username: <your username>
-Password: <your password>`}</pre>
-        </div>
+          <pre>{`[[broker]]
+name      = "ukmesh"
+enabled   = true
+server    = "mqtt.ukmesh.com"
+port      = 443
+transport = "websockets"
+keepalive = 60
+qos       = 0
+retain    = true
 
-        <h3>Custom topic</h3>
-        <p>
-          The UK Mesh broker uses a different topic prefix from the default. After the installer
-          finishes, add the following to your config at{' '}
-          <code>~/.meshcoretomqtt/.env.local</code> (replacing <code>MQTT3_</code> with whichever
-          broker slot you used):
-        </p>
-        <div className="code-block">
-          <pre>{'MCTOMQTT_MQTT3_TOPIC_PACKETS=ukmesh/{IATA}/{PUBLIC_KEY}/packets'}</pre>
+[broker.tls]
+enabled = true
+verify  = true
+
+[broker.auth]
+method   = "password"
+username = "<your username>"
+password = "<your password>"
+
+[broker.topics]
+packets = "ukmesh/<IATA>/{PUBLIC_KEY}/packets"`}</pre>
         </div>
         <p>
+          Replace <code>&lt;IATA&gt;</code> with your three-letter airport code (e.g.{' '}
+          <code>MME</code>, <code>NCL</code>, <code>MAN</code>) and fill in your credentials.
           Then restart the service:
         </p>
         <div className="code-block">

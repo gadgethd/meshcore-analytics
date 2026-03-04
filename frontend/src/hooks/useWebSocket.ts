@@ -10,7 +10,7 @@ export interface WSMessage {
 
 type MessageHandler = (msg: WSMessage) => void;
 
-export function useWebSocket(onMessage: MessageHandler) {
+export function useWebSocket(onMessage: MessageHandler, network?: string) {
   const [readyState, setReadyState] = useState<WSReadyState>('connecting');
   const wsRef   = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -21,7 +21,8 @@ export function useWebSocket(onMessage: MessageHandler) {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${protocol}//${window.location.host}/ws`;
+    const suffix   = network ? `?network=${encodeURIComponent(network)}` : '';
+    const url = `${protocol}//${window.location.host}/ws${suffix}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
     setReadyState('connecting');

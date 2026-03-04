@@ -48,10 +48,11 @@ export async function upsertNode(nodeId: string, updates: {
   hardwareModel?: string;
   firmwareVersion?: string;
   publicKey?: string;
+  network?: string;
 }): Promise<void> {
   await pool.query(
-    `INSERT INTO nodes (node_id, name, lat, lon, iata, role, hardware_model, firmware_version, public_key, last_seen, is_online)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), TRUE)
+    `INSERT INTO nodes (node_id, name, lat, lon, iata, role, hardware_model, firmware_version, public_key, last_seen, is_online, network)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), TRUE, $10)
      ON CONFLICT (node_id) DO UPDATE SET
        name             = COALESCE(EXCLUDED.name, nodes.name),
        lat              = COALESCE(NULLIF(EXCLUDED.lat, 0), nodes.lat),
@@ -61,10 +62,11 @@ export async function upsertNode(nodeId: string, updates: {
        hardware_model   = COALESCE(EXCLUDED.hardware_model, nodes.hardware_model),
        firmware_version = COALESCE(EXCLUDED.firmware_version, nodes.firmware_version),
        public_key       = COALESCE(EXCLUDED.public_key, nodes.public_key),
+       network          = COALESCE(EXCLUDED.network, nodes.network),
        last_seen        = NOW(),
        is_online        = TRUE`,
     [nodeId, updates.name, updates.lat, updates.lon, updates.iata, updates.role,
-     updates.hardwareModel, updates.firmwareVersion, updates.publicKey]
+     updates.hardwareModel, updates.firmwareVersion, updates.publicKey, updates.network ?? null]
   );
 }
 
@@ -96,10 +98,13 @@ export async function insertPacket(p: {
   );
 }
 
-export async function getNodes() {
+export async function getNodes(network?: string) {
+  const whereClause = network ? 'WHERE network = $1' : '';
+  const params = network ? [network] : [];
   const res = await pool.query(
     `SELECT node_id, name, lat, lon, iata, role, last_seen, is_online, hardware_model, public_key, advert_count, elevation_m
-     FROM nodes ORDER BY last_seen DESC`
+     FROM nodes ${whereClause} ORDER BY last_seen DESC`,
+    params
   );
   return res.rows;
 }
@@ -127,19 +132,21 @@ export async function getRecentPackets(limit = 200) {
   return res.rows;
 }
 
-export async function getLastNPackets(n: number) {
+export async function getLastNPackets(n: number, network?: string) {
   // DISTINCT ON deduplicates by hash (same packet heard by multiple observers),
   // picking the most recent observation per hash within the last 24 hours.
+  const nFilter = network ? 'AND network = $2' : '';
+  const params: unknown[] = network ? [n, network] : [n];
   const res = await pool.query(
     `SELECT * FROM (
        SELECT DISTINCT ON (packet_hash) time, packet_hash, rx_node_id, src_node_id,
               packet_type, hop_count, payload, advert_count, path_hashes
        FROM packets
-       WHERE time > NOW() - INTERVAL '24 hours'
+       WHERE time > NOW() - INTERVAL '24 hours' ${nFilter}
        ORDER BY packet_hash, time DESC
      ) deduped
      ORDER BY time DESC LIMIT $1`,
-    [n]
+    params
   );
   return res.rows;
 }

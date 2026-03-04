@@ -44,6 +44,7 @@ ALTER TABLE nodes ADD COLUMN IF NOT EXISTS iata TEXT;
 ALTER TABLE nodes ADD COLUMN IF NOT EXISTS role INTEGER;
 ALTER TABLE nodes ADD COLUMN IF NOT EXISTS advert_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE nodes ADD COLUMN IF NOT EXISTS elevation_m DOUBLE PRECISION;
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS network TEXT NOT NULL DEFAULT 'teesside';
 
 -- ─── Packets hypertable (no retention — data kept indefinitely) ──────────
 
