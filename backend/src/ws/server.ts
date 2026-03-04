@@ -3,7 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Server } from 'node:http';
 import { Redis } from 'ioredis';
 import type { WSMessage, LivePacket } from '../types/index.js';
-import { getNodes, getLastNPackets, getViableLinkPairs } from '../db/index.js';
+import { getNodes, getLastNPackets, getViableLinks } from '../db/index.js';
 
 const REDIS_CHANNEL = 'meshcore:live';
 
@@ -53,12 +53,13 @@ export function initWebSocketServer(httpServer: Server): WebSocketServer {
 
     // Send initial state: known nodes + last 5 minutes of packets
     try {
-      const [nodes, packets, viablePairs] = await Promise.all([
-        getNodes(network), getLastNPackets(10, network), getViableLinkPairs(network),
+      const [nodes, packets, viableLinks] = await Promise.all([
+        getNodes(network), getLastNPackets(10, network), getViableLinks(network),
       ]);
+      const viablePairs = viableLinks.map((l) => [l.node_a_id, l.node_b_id] as [string, string]);
       const initMsg: WSMessage = {
         type: 'initial_state',
-        data: { nodes, packets, viable_pairs: viablePairs },
+        data: { nodes, packets, viable_pairs: viablePairs, viable_links: viableLinks },
         ts: Date.now(),
       };
       ws.send(JSON.stringify(initMsg));

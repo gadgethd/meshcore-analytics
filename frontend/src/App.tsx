@@ -69,6 +69,7 @@ export const App: React.FC = () => {
     linkMetrics,
     viablePairsArr,
     applyInitialViablePairs,
+    applyInitialViableLinks,
     applyLinkUpdate,
   } = useLinkState();
 
@@ -117,6 +118,7 @@ export const App: React.FC = () => {
     handleNodeUpsert,
     handleCoverageUpdate,
     applyInitialViablePairs,
+    applyInitialViableLinks,
     applyLinkUpdate,
   });
 

@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import type { WSMessage } from './useWebSocket.js';
 import type { LivePacketData, MeshNode } from './useNodes.js';
+import type { ViableLinkSnapshot } from './useLinkState.js';
 
 type UseAppMessageHandlerParams = {
   handleInitialState: (data: {
@@ -22,6 +23,7 @@ type UseAppMessageHandlerParams = {
   handleNodeUpsert: (data: Partial<MeshNode> & { node_id: string }) => void;
   handleCoverageUpdate: (data: { node_id: string; geom: { type: string; coordinates: unknown } }) => void;
   applyInitialViablePairs: (pairs?: [string, string][]) => void;
+  applyInitialViableLinks: (links?: ViableLinkSnapshot[]) => void;
   applyLinkUpdate: (update: {
     node_a_id: string;
     node_b_id: string;
@@ -40,15 +42,21 @@ export function useAppMessageHandler({
   handleNodeUpsert,
   handleCoverageUpdate,
   applyInitialViablePairs,
+  applyInitialViableLinks,
   applyLinkUpdate,
 }: UseAppMessageHandlerParams) {
   return useCallback((msg: WSMessage) => {
     if (msg.type === 'initial_state') {
       const data = msg.data as Parameters<typeof handleInitialState>[0] & {
         viable_pairs?: [string, string][];
+        viable_links?: ViableLinkSnapshot[];
       };
       handleInitialState(data);
-      applyInitialViablePairs(data.viable_pairs);
+      if (data.viable_links && data.viable_links.length > 0) {
+        applyInitialViableLinks(data.viable_links);
+      } else {
+        applyInitialViablePairs(data.viable_pairs);
+      }
       return;
     }
 
@@ -90,6 +98,7 @@ export function useAppMessageHandler({
     handleNodeUpsert,
     handleCoverageUpdate,
     applyInitialViablePairs,
+    applyInitialViableLinks,
     applyLinkUpdate,
   ]);
 }

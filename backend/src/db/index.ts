@@ -173,4 +173,40 @@ export async function getViableLinkPairs(network?: string): Promise<[string, str
   return res.rows.map((r) => [r.node_a_id, r.node_b_id]);
 }
 
+export type ViableLinkRow = {
+  node_a_id: string;
+  node_b_id: string;
+  observed_count: number;
+  itm_viable: boolean | null;
+  itm_path_loss_db: number | null;
+  count_a_to_b: number;
+  count_b_to_a: number;
+};
+
+/** Returns viable links with metrics so UI can render precomputed styles immediately. */
+export async function getViableLinks(network?: string): Promise<ViableLinkRow[]> {
+  const params: unknown[] = [MIN_LINK_OBSERVATIONS];
+  const networkFilter = network ? 'AND a.network = $2 AND b.network = $2' : '';
+  if (network) params.push(network);
+
+  const res = await pool.query<ViableLinkRow>(
+    `SELECT
+       nl.node_a_id,
+       nl.node_b_id,
+       nl.observed_count,
+       nl.itm_viable,
+       nl.itm_path_loss_db,
+       nl.count_a_to_b,
+       nl.count_b_to_a
+     FROM node_links nl
+     JOIN nodes a ON a.node_id = nl.node_a_id
+     JOIN nodes b ON b.node_id = nl.node_b_id
+     WHERE (nl.itm_viable = true OR nl.force_viable = true)
+       AND nl.observed_count >= $1
+       ${networkFilter}`,
+    params,
+  );
+  return res.rows;
+}
+
 export { pool };

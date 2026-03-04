@@ -11,6 +11,16 @@ type LinkUpdate = {
   count_b_to_a?: number;
 };
 
+export type ViableLinkSnapshot = {
+  node_a_id: string;
+  node_b_id: string;
+  observed_count: number;
+  itm_viable: boolean | null;
+  itm_path_loss_db?: number | null;
+  count_a_to_b?: number;
+  count_b_to_a?: number;
+};
+
 export function useLinkState() {
   const [linkPairs, setLinkPairs] = useState<Set<string>>(new Set());
   const [linkMetrics, setLinkMetrics] = useState<Map<string, LinkMetrics>>(new Map());
@@ -31,6 +41,27 @@ export function useLinkState() {
       return metrics;
     });
     setViablePairsArr(viablePairs);
+  }, []);
+
+  const applyInitialViableLinks = useCallback((viableLinks?: ViableLinkSnapshot[]) => {
+    if (!viableLinks || viableLinks.length === 0) return;
+
+    const pairs = viableLinks.map((l) => [l.node_a_id, l.node_b_id] as [string, string]);
+    setLinkPairs(new Set(pairs.map(([a, b]) => linkKey(a, b))));
+    setViablePairsArr(pairs);
+    setLinkMetrics(() => {
+      const metrics = new Map<string, LinkMetrics>();
+      for (const link of viableLinks) {
+        metrics.set(linkKey(link.node_a_id, link.node_b_id), {
+          observed_count: link.observed_count,
+          itm_viable: link.itm_viable,
+          itm_path_loss_db: link.itm_path_loss_db ?? null,
+          count_a_to_b: link.count_a_to_b,
+          count_b_to_a: link.count_b_to_a,
+        });
+      }
+      return metrics;
+    });
   }, []);
 
   const applyLinkUpdate = useCallback((update: LinkUpdate) => {
@@ -67,7 +98,7 @@ export function useLinkState() {
     linkMetrics,
     viablePairsArr,
     applyInitialViablePairs,
+    applyInitialViableLinks,
     applyLinkUpdate,
   };
 }
-
