@@ -149,7 +149,8 @@ export const MIN_LINK_OBSERVATIONS = 5;
 /** Returns only confirmed viable link pairs — compact for sending in initial WebSocket state. */
 export async function getViableLinkPairs(): Promise<[string, string][]> {
   const res = await pool.query<{ node_a_id: string; node_b_id: string }>(
-    `SELECT node_a_id, node_b_id FROM node_links WHERE itm_viable = true AND observed_count >= $1`,
+    `SELECT node_a_id, node_b_id FROM node_links
+     WHERE (itm_viable = true OR force_viable = true) AND observed_count >= $1`,
     [MIN_LINK_OBSERVATIONS],
   );
   return res.rows.map((r) => [r.node_a_id, r.node_b_id]);

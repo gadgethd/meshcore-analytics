@@ -151,27 +151,42 @@ function resolveBetaPath(
 
   type HopResult = { node: MeshNode; conf: number } | null; // null = skipped
 
-  /** Ordered candidate list for a single hop: confirmed neighbours first, then reachable. */
+  /** Ordered candidate list for a single hop: confirmed neighbours first, then reachable,
+   *  then a last-resort closest match within 500 km. A hop is only skipped when no node
+   *  in the DB has the matching 2-char prefix at all. */
   function getCandidates(prefix: string, prevNode: MeshNode): Array<{ node: MeshNode; conf: number }> {
     const all = Array.from(allNodes.values()).filter(
       (n) => n.lat && n.lon && (n.role === undefined || n.role === 2)
         && !n.name?.includes('🚫') && n.node_id.toUpperCase().startsWith(prefix),
     );
-    const confirmedSet = new Set<string>();
+    if (all.length === 0) return [];
+
+    const usedIds = new Set<string>();
+
     const confirmed = all
       .filter((c) => linkPairs.has(linkKey(c.node_id, prevNode.node_id)))
       .sort((a, b) => distKm(a, prevNode) - distKm(b, prevNode))
-      .map((c) => { confirmedSet.add(c.node_id); return { node: c, conf: 0.9 }; });
+      .map((c) => { usedIds.add(c.node_id); return { node: c, conf: 0.9 }; });
+
     const reachable = all
-      .filter((c) => !confirmedSet.has(c.node_id) && canReach(c, prevNode, coverage))
+      .filter((c) => !usedIds.has(c.node_id) && canReach(c, prevNode, coverage))
       .sort((a, b) => distKm(a, prevNode) - distKm(b, prevNode))
-      .slice(0, 2) // cap to top-2 to bound the search tree
-      .map((c) => ({ node: c, conf: 0.3 / Math.max(1, all.length) }));
-    return [...confirmed, ...reachable];
+      .slice(0, 2)
+      .map((c) => { usedIds.add(c.node_id); return { node: c, conf: 0.3 / Math.max(1, all.length) }; });
+
+    // Last resort: closest prefix match within 150 km, even if outside coverage radius.
+    // Prevents hops being silently dropped just because link data is sparse.
+    const fallback = all
+      .filter((c) => !usedIds.has(c.node_id) && distKm(c, prevNode) < 150)
+      .sort((a, b) => distKm(a, prevNode) - distKm(b, prevNode))
+      .slice(0, 1)
+      .map((c) => ({ node: c, conf: 0.05 / Math.max(1, all.length) }));
+
+    return [...confirmed, ...reachable, ...fallback];
   }
 
-  // Allow skipping at most 1/3 of hops — prevents degenerate all-skip paths.
-  const maxSkips = Math.ceil(pathHashes.length / 3);
+  // Only skip a hop when there is genuinely no node in the DB matching the prefix.
+  const maxSkips = pathHashes.length;
   // Hard limit on total DFS calls to prevent exponential blowup on ambiguous prefixes.
   let budget = 300;
 

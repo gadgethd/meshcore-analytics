@@ -88,7 +88,7 @@ def compute_path_loss(lat1: float, lon1: float, elev1: float,
 
     ds = gdal.Open(vrt_path)
     if ds is None:
-        viable = fspl < LINK_BUDGET_DB
+        viable = fspl < LINK_BUDGET_DB - FADE_MARGIN_DB
         return fspl, viable
 
     gt     = ds.GetGeoTransform()
@@ -135,7 +135,7 @@ def compute_path_loss(lat1: float, lon1: float, elev1: float,
         ))
 
     total_loss = fspl + diff_loss
-    viable     = total_loss < LINK_BUDGET_DB
+    viable     = total_loss < LINK_BUDGET_DB - FADE_MARGIN_DB
     return total_loss, viable
 
 
