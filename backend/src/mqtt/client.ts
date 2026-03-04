@@ -163,8 +163,6 @@ function buildSummary(payloadType: number, decoded: unknown, rawHex?: string): s
   }
 }
 
-/** Only packets from this IATA are emitted to the live dashboard. */
-const DISPLAY_IATA = 'MME';
 
 export function startMqttClient(): void {
   const brokerUrl = process.env['MQTT_BROKER_URL'] ?? 'ws://mosquitto:9001';
@@ -325,8 +323,7 @@ async function handleMessage(topic: string, rawPayload: Buffer): Promise<void> {
   void upsertNode(observerKey, { iata });
   emitNode(observerKey);
 
-  // Only push to the live dashboard for the display IATA
-  if (iata === DISPLAY_IATA) {
+  {
     const livePacket: LivePacket = {
       id:         crypto.randomUUID(),
       packetHash: finalHash,
